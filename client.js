@@ -1435,7 +1435,7 @@ window.__ModuleLoader__.load({
       : cell.ready ? '第' + (i + 1) + '块菜畦，可以收获'
       : '第' + (i + 1) + '块菜畦，' + (cell.watered ? '仍在生长' : '点击浇水')
 
-    function PixelYard({ snap, act, selCrop, busy, onNotice }) {
+    function PixelYard({ snap, act, selCrop, busy, onNotice, presence }) {
       const canvasRef = React.useRef(null)
       const girlRef = React.useRef({ x: 430, y: 512, facing: 'up', step: 0, moving: false, target: null })
       const busyRef = React.useRef(false)
@@ -1532,6 +1532,7 @@ window.__ModuleLoader__.load({
       }
       return h('div', { className: 'fh-yard-scene', role: 'group', 'aria-label': '像素院子菜畦' },
         h('canvas', { ref: canvasRef, 'aria-hidden': 'true' }),
+        presence && presence.bubble ? h('div', { className: 'fh-pixel-say', key: 'yard-' + presence.id }, presence.bubble) : null,
         (snap.garden || []).map((cell, i) => h('button', {
           key: i, type: 'button', className: 'fh-yard-plot-hit', 'data-slot': i,
           'data-ready': cell && cell.ready ? 'true' : 'false',
@@ -1542,7 +1543,7 @@ window.__ModuleLoader__.load({
         })))
     }
 
-    function PixelRoom({ snap, act }) {
+    function PixelRoom({ snap, act, presence }) {
       const canvasRef = React.useRef(null)
       const stateRef = React.useRef({
         girl: { x: 480, y: 340, facing: 'down', step: 0, moving: false },
@@ -1676,14 +1677,16 @@ window.__ModuleLoader__.load({
         s.target = { x: p.x, y: p.y }
       }
       const a = snap.activity
-      const line = snap.sleeping ? '' : (a ? (a.line || a.verb) : '')
+      // 共享临场意图的短气泡优先显示，让像素形象与 Live2D 桌宠表现同一状态。
+      const sharedLine = presence && presence.bubble ? presence.bubble : ''
+      const line = sharedLine || (snap.sleeping ? '' : (a ? (a.line || a.verb) : ''))
       return h('div', { className: 'fh-pixel' },
         h('canvas', { ref: canvasRef, onPointerDown: onDown, onPointerMove: onMove, onPointerUp: onUp, onPointerCancel: onUp }),
         h('div', { className: 'fh-pixel-hud' },
           h('span', null, '🕒 ' + String(snap.clock?.hour ?? 0).padStart(2, '0') + ':' + String(snap.clock?.minute ?? 0).padStart(2, '0')),
           h('span', null, (snap.weather === 'rain' ? '🌧️' : snap.weather === 'snow' ? '❄️' : '☀️') + ' ' + (snap.weather === 'rain' ? '雨天' : snap.weather === 'snow' ? '落雪' : '晴日')),
           h('span', null, snap.sleeping ? '💤 睡下了' : (a ? a.name : '闲着'))),
-        line ? h('div', { className: 'fh-pixel-say', key: a.id + a.startedAt }, line) : null,
+        line ? h('div', { className: 'fh-pixel-say', key: sharedLine ? ('presence-' + presence.id) : (a.id + a.startedAt) }, line) : null,
         h('div', { className: 'fh-pixel-tip' }, '点地面走路 · 点家具互动 · 拖她移动'),
       )
     }
@@ -1702,6 +1705,9 @@ window.__ModuleLoader__.load({
       const [petTextInput, setPetTextInput] = React.useState('')
       const [petCatalog, setPetCatalog] = React.useState(null)
       const [petEvents, setPetEvents] = React.useState([])
+      // 共享临场意图：桌宠与像素形象表现同一状态（短轮询，过期自动消失）
+      const [presence, setPresence] = React.useState(null)
+      const [presenceExpression, setPresenceExpression] = React.useState('')
       const shellRef = React.useRef(null)
       useEffect(() => {
         const el = shellRef.current
@@ -1727,9 +1733,20 @@ window.__ModuleLoader__.load({
         .then(r => setPetCatalog(r.catalog || null)).catch(() => {})
       const petLoadEvents = () => petApi('?view=events&after=0', 'GET')
         .then(r => setPetEvents((r.events || []).slice(-8).reverse())).catch(() => {})
+      // 共享临场意图：3 秒轮询（比 15 秒有效期短，过期后端会返回 null）。
+      const loadPresence = () => petApi('?view=presence', 'GET')
+        .then(r => setPresence(r && r.presence || null)).catch(() => {})
       useEffect(() => {
         if (tab === 'pet') { void petRefresh(); void petLoadCatalog(); void petLoadEvents() }
       }, [tab])
+      useEffect(() => {
+        void loadPresence()
+        const timer = setInterval(() => {
+          if (typeof document !== 'undefined' && document.hidden) return
+          void loadPresence()
+        }, 3000)
+        return () => clearInterval(timer)
+      }, [])
       const petDo = (action, args) => {
         if (busy) return
         setBusy(true); setMsg('')
@@ -1786,7 +1803,7 @@ window.__ModuleLoader__.load({
         // ── 此刻 ──
         snap && tab === 'daily' ? h('div', { style: { display: 'flex', flexDirection: 'column', gap: 10 } },
           h('div', { className: 'fh-scene-wrap' },
-            h(PixelRoom, { snap, act }),
+            h(PixelRoom, { snap, act, presence }),
             ),
           h('div', { className: 'fh-chips' },
             chip((snap.autonomy ? '自主生活 · 开' : '自主生活 · 关'), () => act('autonomy', { on: !snap.autonomy }), busy),
@@ -1807,7 +1824,7 @@ window.__ModuleLoader__.load({
         // ── 院子 ──
         snap && tab === 'garden' ? h('div', { style: { display: 'flex', flexDirection: 'column', gap: 10 } },
           h('div', { className: 'fh-scene-wrap' },
-            h(PixelYard, { snap, act, selCrop, busy, onNotice: setMsg }),
+            h(PixelYard, { snap, act, selCrop, busy, onNotice: setMsg, presence }),
             ),
           h('div', { className: 'fh-msg' },
             '点菜畦播种 · 再点浇水 · 成熟后收获 · 共 ' + (snap.garden || []).filter(c => c && c.ready).length + ' 块可收'),
@@ -1886,6 +1903,13 @@ window.__ModuleLoader__.load({
               onKeyDown: e => { if (e.key === 'Enter' && petTextInput.trim()) { petDo('say', { text: petTextInput }); setPetTextInput('') } } }),
             h('div', { className: 'fh-chips', style: { marginTop: 8 } },
               chip('发送台词', () => { if (petTextInput.trim()) { petDo('say', { text: petTextInput }); setPetTextInput('') } }, busy || !pet?.connected))),
+          h('div', { className: 'fh-panel' },
+            title('临场意图', '表情 + 台词同时作用于桌宠与像素小屋/院子'),
+            h('select', { className: 'fh-select', value: presenceExpression, onChange: e => setPresenceExpression(e.target.value) },
+              h('option', { value: '' }, '（不带表情）'),
+              (petCatalog?.expression || []).map(e => h('option', { key: e.name, value: e.name }, e.name))),
+            h('div', { className: 'fh-chips', style: { marginTop: 8 } },
+              chip('同步到两种形象', () => { petDo('presence', { bubble: petTextInput || '我在这儿呢～', expression: presenceExpression }); void loadPresence() }, busy || !pet?.connected))),
           petCatalog && (petCatalog.expression || []).length ? h('div', { className: 'fh-panel' },
             title('表情', `${petCatalog.expression.length} 个 · 来自你的模型`),
             h('div', { className: 'fh-pet-grid' },

@@ -13,6 +13,7 @@ pet/api.json
 pet/capture.jpg
 pet/capture-face.png
 pet/final-face.png
+pet/capture-probe.json
 
 # 编辑器与系统文件
 .vscode/

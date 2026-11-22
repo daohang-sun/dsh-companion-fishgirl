@@ -1,3 +1,15 @@
+## v0.22.1 · Live2D 运行库升级 + 鼻部黑块修复 + 共享临场意图 · 2026-11-22
+
+- **运行库升级**：`pet/vendor/pixi.min.js` 升到 PixiJS 7.4.3，`pet/vendor/cubism4.min.js` 升到 pixi-live2d-display 0.5.0-beta（内置 Cubism Web R7），Cubism Core 5.x 保留。`pet/index.html` 在加载 cubism4 前加 `process.env.NODE_ENV` 垫片，解决 0.5.0-beta UMD 在 Electron 关闭 Node 集成后因无 `process` 而加载失败。加载顺序保持 pixi → core → 垫片 → cubism4 → renderer。
+- **鼻部黑块/白块修复**：大肥鱼鼻子层是「乘算色黑 + 屏幕色肤色」，旧 Pixi 扩展在带遮罩路径上没让屏幕色参与计算，显示为异常色块。新增 `repairScreenColorLayers()`，在模型加载后入舞台前遍历 Drawable，把「乘算近黑 + 屏幕肤色/浅色」的图层乘算色覆盖为白色并打开逐层覆盖标记——**只改运行时颜色，不写模型文件**。真实模型检出 7 个修复层；A/B 截图对比确认修复前鼻梁有明显白色矩形块、修复后恢复自然肤色，眼睛/腮红/服装无异常。只在 `?noRepair=1` 时跳过（诊断用）。
+- **动作切换卡顿**：`motionPreload:'ALL'`；启动时把全部 23 个表情预载进 `expressionCache`，切表情不再重复请求网络；修复「一次动作调用两次 `model.motion()`」；清空表情改用 `expressionManager.resetExpression()`（不再随机抽表情）；所有命令进同一条 Promise 队列串行执行；命令轮询 900ms→500ms 并加 polling 锁防重叠；轮询在表情预载前启动，消除「页面 READY 但命令没响应」的空窗。
+- **拖动闪烁**：`pointermove` 只累计位移，用 `requestAnimationFrame` 每帧最多提交一次窗口移动，`pointerup/cancel` 时用 `finishMove()` 补交最后位移，页面卸载时取消动画帧并清理待发位移，显著降低 IPC 频率与重绘闪烁。
+- **共享临场意图（presence）**：桌宠 `/api/action` 新增经过校验的 `presence` 命令，一份意图同时带表情 + 动作 + 短气泡，带 `id` 去重与 `expiresAt` 过期检查（重连不重播旧动作）。渲染端新增 `lastPresenceId` 去重。同一份意图镜像到插件进程并经由 `/api/companion-fishgirl/pet?view=presence` 暴露，面板的像素小屋/院子短轮询读取，**两种形象表现同一状态**；`companion_pet` 工具新增 `op=presence` 让模型主动创造共享意图。桌宠 tab 增加「临场意图」面板（表情 + 台词，一键同步）。
+- **可诊断性**：renderer 暴露 `window.__fishPet` 探针（ready/模型加载次数/鼻修复层数/表情预载数/最后 presence id）；`?capture=1` 回传截图时一并上报探针到 `capture-probe.json`。
+- 验证：新增 `verify-live2d-complete.mjs`（Node 19 项）、`verify-live2d-browser.mjs`（真实模型 + Chrome：READY/单次加载/7 修复层/23 表情预载/presence 事件）、`verify-nose-ab.mjs`（A/B 截图）、`verify-presence-sync.mjs`（9 项同步链路）全部通过；v021 桌宠桥接回归通过；dist 重编、`node --check` 全通过。
+
+---
+
 ## v0.22.0 · 海洋玻璃主题 + 五页签 + 像素院子 · 2026-11-21
 
 - **小窝界面重做**：固定头 + 五个页签 + 唯一内容滚动区；此刻/院子/画册/星图/Live2D 桌宠五页均可滚到底，页签与标题固定。窄屏页签横向滚动，数值、画册与桌宠卡片自动减列。

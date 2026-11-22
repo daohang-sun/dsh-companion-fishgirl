@@ -1,10 +1,18 @@
 /**
  * 大肥鱼 Live2D 桌宠 · 渲染进程
  *
- * 用 pixi-live2d-display(cubism4) 真正加载用户本机提供的
+ * 用 pixi-live2d-display(cubism4, 0.5.0-beta) 真正加载用户本机提供的
  * 大肥鱼.model3.json + .moc3 + 贴图 + physics + 表情 + 动作。
  * 从本进程 HTTP 服务拿 runtime.model3.json（服务端已补全 Expressions/Motions）。
- * 轮询命令队列执行表情/动作/说话；点击命中区、拖拽位置、事件回传插件。
+ * 轮询命令队列执行表情/动作/说话/presence；点击命中区、拖拽位置、事件回传插件。
+ *
+ * 相较旧版（R4）的修复：
+ *  - repairScreenColorLayers(): 鼻部「黑乘算 + 肤色屏幕色」图层在旧 Pixi 扩展里
+ *    屏幕色没参与计算导致显示为黑块；运行时把这类图层的乘算色覆盖为白色。
+ *  - 表情预载到 expressionCache，切表情不再重复请求网络；清空改用 resetExpression。
+ *  - 一次动作只调一次 model.motion()；所有命令进同一 Promise 队列串行执行。
+ *  - 拖动位移按 requestAnimationFrame 合并，每帧最多一次 IPC，减少闪烁。
+ *  - presence 临场意图带 id 去重 + expiresAt 过期检查，表情/动作/气泡一次到位。
  */
 
 (function () {
@@ -19,6 +27,17 @@
   const canvas = document.getElementById('stage')
   let model = null, app = null, catalog = { expression: [], motion: [] }
   let lastCmd = Number(qs.get('after') || 0), lastEventSending = 0
+  let repairedLayers = 0
+
+  // 诊断/自动化探针：暴露真实加载状态，避免只看版本号或猜。
+  window.__fishPet = {
+    ready: false,
+    modelLoads: 0,
+    repairedLayers: 0,
+    expressionCache: 0,
+    lastPresenceId: '',
+    catalog: () => catalog,
+  }
 
   function showBubble(text, ms) {
     if (!text) { bubble.style.display = 'none'; return }
@@ -39,46 +58,144 @@
     } catch {}
   }
 
+  /**
+   * 鼻部黑块修复。
+   * 大肥鱼模型的鼻子层（ArtMesh340 一带）数据为「乘算色=黑、屏幕色=肤色」：
+   * 理论肤色屏幕色会把黑色纹理重新染成肤色，但旧 Pixi 渲染扩展在带遮罩路径上
+   * 没让屏幕色参与最终计算，于是乘算黑直接显示成黑块。
+   * 这里不改模型文件，只在运行时把这类图层的乘算色覆盖为白色并打开逐层覆盖标记，
+   * 让纹理本身的肤色显示出来。条件：乘算 RGB 接近 0 且屏幕色为浅肤色。
+   */
+  function repairScreenColorLayers() {
+    repairedLayers = 0
+    if (!model) return
+    const core = model.internalModel && model.internalModel.coreModel
+    if (!core || typeof core.getDrawableCount !== 'function') return
+    if (typeof core.getDrawableMultiplyColor !== 'function' ||
+        typeof core.getDrawableScreenColor !== 'function' ||
+        typeof core.setMultiplyColorByRGBA !== 'function' ||
+        typeof core.setOverwriteFlagForDrawableMultiplyColors !== 'function') return
+    let count = 0
+    try {
+      const n = core.getDrawableCount()
+      for (let i = 0; i < n; i++) {
+        const mul = core.getDrawableMultiplyColor(i) // { R, G, B, A } 0..1
+        const scr = core.getDrawableScreenColor(i)   // { R, G, B, A } 0..1
+        if (!mul || !scr) continue
+        const blackMul = mul.R < 0.06 && mul.G < 0.06 && mul.B < 0.06
+        const skinScreen = scr.R > 0.9 && scr.G > 0.6 && scr.B > 0.6
+        if (!blackMul || !skinScreen) continue
+        core.setMultiplyColorByRGBA(i, 1, 1, 1, 1)
+        core.setOverwriteFlagForDrawableMultiplyColors(i, true)
+        count++
+      }
+    } catch (err) {
+      console.warn('repairScreenColorLayers failed:', err && err.message || err)
+    }
+    repairedLayers = count
+    window.__fishPet.repairedLayers = count
+    if (qs.get('debug') === '1') console.log('[fishgirl] repaired multiply-color layers:', count)
+  }
+
   // 表情直接写 coreModel 的自定义参数（key1..key13），这是 exp3 文件真正做的事。
   // pixi-live2d-display 的 expressionManager.setExpression 在这份 VTS 模型上返回 false
   // （其 _loadExpression 未针对本模型实现），所以走参数直写更可靠。
+  // 启动时把全部 exp3 预载进 expressionCache，切表情不再重复请求网络。
+  const expressionCache = new Map()
   let activeExp = null
+
+  function expParams(exp) {
+    return Array.isArray(exp && exp.Parameters)
+      ? exp.Parameters.map(p => ({ id: p.Id, value: Number(p.Value) || 0 }))
+      : []
+  }
+
+  async function preloadExpressions() {
+    for (const e of (catalog.expression || [])) {
+      if (!e || !e.name || expressionCache.has(e.name)) continue
+      try {
+        const r = await fetch(e.file, { headers: H(TOKEN) })
+        const exp = await r.json()
+        expressionCache.set(e.name, expParams(exp))
+      } catch {}
+    }
+    window.__fishPet.expressionCache = expressionCache.size
+    void sendEvent('expressions_preloaded', { count: expressionCache.size })
+  }
+
   function applyExpression(name) {
     if (!model) return
-    if (!name) { activeExp = null; try { model.expression() } catch {} ; return }
-    const hit = catalog.expression.find(x => x.name === name) || { name, file: API + '/model/Exp3/' + encodeURIComponent(name + '.exp3.json') }
+    if (!name) {
+      activeExp = null
+      // 不用 model.expression()（它会随机挑一个表情），改为显式 reset。
+      try {
+        const mgr = model.internalModel && model.internalModel.motionManager && model.internalModel.motionManager.expressionManager
+        if (mgr && typeof mgr.resetExpression === 'function') mgr.resetExpression()
+      } catch {}
+      return
+    }
+    const cached = expressionCache.get(name)
+    if (cached) {
+      activeExp = { name, params: cached, startedAt: performance.now() }
+      if (qs.get('debug') === '1') document.title = 'EXPR ' + name + ' params=' + cached.map(p => p.id + '=' + p.value).join(',')
+      return
+    }
+    // 缓存未命中（例如运行中新增表情）：懒加载一次后写入缓存。
+    const hit = catalog.expression.find(x => x.name === name)
+      || { name, file: API + '/model/Exp3/' + encodeURIComponent(name + '.exp3.json') }
     fetch(hit.file, { headers: H(TOKEN) }).then(r => r.json()).then(exp => {
-      const params = Array.isArray(exp.Parameters) ? exp.Parameters.map(p => ({ id: p.Id, value: Number(p.Value) || 0 })) : []
+      const params = expParams(exp)
+      expressionCache.set(name, params)
       activeExp = { name, params, startedAt: performance.now() }
-      // 同时让库自己试一次（无害），并给诊断标题
-      try { const mgr = model.internalModel?.motionManager?.expressionManager; if (mgr) void mgr.setExpression(name) } catch {}
-      if (qs.get('debug') === '1') document.title = 'EXPR ' + name + ' params=' + params.map(p => p.id + '=' + p.value).join(',')
     }).catch(() => {})
   }
+
   function applyExpressionFrame() {
     if (!activeExp || !model) return
-    const core = model.internalModel?.coreModel
+    const core = model.internalModel && model.internalModel.coreModel
     if (!core || typeof core.setParameterValueById !== 'function') return
     const fade = Math.min(1, (performance.now() - activeExp.startedAt) / 450)
     for (const p of activeExp.params) {
       try { core.setParameterValueById(p.id, p.value * fade) } catch {}
     }
   }
+
   function applyMotion(name, group) {
     if (!model || !name) return
-    try { model.motion(group && catalog.motion.find(m => m.name === name && m.group === group) ? group : 'Tap', undefined, 3) } catch {}
-    // pixi-live2d-display: motion(group, index?, priority?)；按名字找索引更精确
-    const list = model.internalModel?.motionManager?.definitions || {}
-    const groupName = group && list[group] ? group : (Object.keys(list).find(g => (list[g] || []).some(d => decodeURIComponent((d.File || '').split('/').pop()) === name + '.motion3.json')))
+    // 只解析一次组/索引，然后只调用一次 model.motion() —— 旧版在此调用两次导致卡顿。
+    const list = (model.internalModel && model.internalModel.motionManager && model.internalModel.motionManager.definitions) || {}
+    const fileOf = (d) => decodeURIComponent(String((d && d.File) || '').split('/').pop())
+    const groupName = group && list[group] ? group
+      : Object.keys(list).find(g => (list[g] || []).some(d => fileOf(d) === name + '.motion3.json'))
     if (!groupName) return
-    const idx = (list[groupName] || []).findIndex(d => decodeURIComponent((d.File || '').split('/').pop()) === name + '.motion3.json')
-    if (idx >= 0) { try { model.motion(groupName, idx, 3) } catch {} }
+    const idx = (list[groupName] || []).findIndex(d => fileOf(d) === name + '.motion3.json')
+    try { model.motion(groupName, idx >= 0 ? idx : undefined, 3) } catch {}
+  }
+
+  // presence：桌宠与像素小屋/院子共享的「同一份临场意图」。
+  // 服务端按 id 去重并带 expiresAt，这里再做一次防御性去重 + 过期检查，
+  // 避免重连时重播旧动作。
+  let lastPresenceId = ''
+  function applyPresence(cmd) {
+    const id = String(cmd.id || cmd.seq || '')
+    if (id && id === lastPresenceId) return
+    if (cmd.expiresAt && Date.now() > Number(cmd.expiresAt)) return
+    if (id) {
+      lastPresenceId = id
+      window.__fishPet.lastPresenceId = id
+    }
+    const text = cmd.bubble || cmd.text
+    if (text) showBubble(String(text).slice(0, 200), cmd.duration)
+    if (cmd.expression) applyExpression(cmd.expression)
+    if (cmd.motion) applyMotion(cmd.motion, cmd.motionGroup || cmd.group)
+    void sendEvent('presence_done', { id })
   }
 
   async function handleCommand(cmd) {
     switch (cmd.type) {
       case 'expression': applyExpression(cmd.name); break
       case 'motion': applyMotion(cmd.name, cmd.group); break
+      case 'presence': applyPresence(cmd); break
       case 'say':
         showBubble(cmd.text, cmd.duration)
         if (cmd.expression) applyExpression(cmd.expression)
@@ -97,12 +214,25 @@
     await sendEvent('command_done', { seq: cmd.seq, cmdType: cmd.type })
   }
 
+  // 所有命令进同一条 Promise 队列，保证串行执行，避免多个动作互相打断。
+  let cmdQueue = Promise.resolve()
+  function enqueueCommand(cmd) {
+    cmdQueue = cmdQueue.then(() => handleCommand(cmd)).catch(err => console.error('command error:', err))
+    return cmdQueue
+  }
+
+  let polling = false
   async function poll() {
+    if (polling) return
+    polling = true
     try {
       const r = await fetch(API + '/api/commands?after=' + lastCmd, { headers: H(TOKEN) })
       const j = await r.json()
-      for (const cmd of (j.commands || [])) { lastCmd = Math.max(lastCmd, cmd.seq); await handleCommand(cmd) }
-    } catch {}
+      for (const cmd of (j.commands || [])) {
+        lastCmd = Math.max(lastCmd, cmd.seq)
+        await enqueueCommand(cmd)
+      }
+    } catch {} finally { polling = false }
   }
 
   async function loadCatalog() {
@@ -157,8 +287,12 @@
     try {
       model = await PIXI.live2d.Live2DModel.from(API + '/runtime.model3.json', {
         autoInteract: true,
-        motionPreload: 'IDLE',
+        motionPreload: 'ALL',
       })
+      window.__fishPet.modelLoads++
+      // 鼻部修复：加载完成、加入舞台之前执行（只改运行时颜色，不写模型文件）。
+      // ?noRepair=1 仅用于诊断对比，看看不修复时鼻部是否真的是黑块。
+      if (qs.get('noRepair') !== '1') repairScreenColorLayers()
       app.stage.addChild(model)
       // 必须在 internalModel.update() 内的 model.update() 之前写入参数，
       // 否则参数被本帧几何计算忽略（写 Ticker/shared 都晚了一步）。
@@ -175,9 +309,19 @@
       fitModel()
       refitFor(120); refitFor(450); refitFor(1200)
       setHint('')
+
+      // 轮询在表情预载之前启动：避免「页面 READY 但发命令没响应」的空窗期。
+      setInterval(poll, 500)
+      void poll()
+
       await loadCatalog()
-      // 供自动化/诊断读取：标题带 READY 表示模型已真正渲染
-      document.title = '大肥鱼 Live2D · READY · ' + catalog.expression.length + '表情/' + catalog.motion.length + '动作'
+      window.__fishPet.ready = true
+      // 供自动化/诊断读取：标题带 READY 表示模型已真正渲染。
+      document.title = '大肥鱼 Live2D · READY · ' + catalog.expression.length + '表情/' + catalog.motion.length + '动作 · 鼻修复' + repairedLayers
+      void sendEvent('model_ready', { repaired: repairedLayers, expressions: catalog.expression.length, motions: catalog.motion.length })
+      // 表情预载不阻塞 READY，后台进行。
+      void preloadExpressions()
+
       // 诊断截图：?capture=1 时把画布缩略图回传服务端（仅本机，便于验证渲染）
       if (qs.get('capture') === '1') {
         setTimeout(() => {
@@ -191,7 +335,11 @@
             const w = raw.width * r, h = raw.height * r
             c.drawImage(raw, (small.width - w) / 2, (small.height - h) / 2, w, h)
             fetch(API + '/api/capture', { method: 'POST', headers: H(TOKEN),
-              body: JSON.stringify({ image: small.toDataURL('image/jpeg', 0.8) }) })
+              body: JSON.stringify({ image: small.toDataURL('image/jpeg', 0.8), probe: {
+                ready: window.__fishPet.ready, modelLoads: window.__fishPet.modelLoads,
+                repairedLayers: window.__fishPet.repairedLayers,
+                expressionCache: window.__fishPet.expressionCache,
+              } }) })
           } catch {}
         }, 1500)
       }
@@ -201,29 +349,51 @@
       setHint('模型加载失败：' + (err && err.message || err))
       showBubble('模型加载失败，请检查模型目录', 8000)
     }
-    await loadCatalog()
-    setInterval(poll, 900)
     window.addEventListener('resize', fitModel)
 
-    // 拖动：Electron 注入 petBridge.move；浏览器里退化为移动模型本体
-    let dragging = false, sx = 0, sy = 0, ox = 0, oy = 0, moved = false
+    // 拖动：Electron 注入 petBridge.move；浏览器里退化为移动模型本体。
+    // pointermove 只累计位移，用 requestAnimationFrame 每帧最多提交一次，
+    // pointerup/cancel 时 finishMove 提交最后一点，减少重绘闪烁与 IPC 压力。
+    let dragging = false, lastX = 0, lastY = 0, moved = false
+    let pendingDX = 0, pendingDY = 0, rafId = 0
+    const flushMove = () => {
+      rafId = 0
+      if (!pendingDX && !pendingDY) return
+      const dx = pendingDX, dy = pendingDY
+      pendingDX = 0; pendingDY = 0
+      if (window.petBridge && window.petBridge.move) window.petBridge.move(dx, dy)
+      else if (model) { model.x += dx; model.y += dy }
+    }
+    const scheduleMove = () => { if (!rafId) rafId = requestAnimationFrame(flushMove) }
+    const finishMove = () => {
+      if (rafId) { cancelAnimationFrame(rafId); rafId = 0 }
+      flushMove()
+    }
     canvas.addEventListener('pointerdown', (e) => {
-      dragging = true; moved = false; sx = e.clientX; sy = e.clientY
-      ox = model ? model.x : 0; oy = model ? model.y : 0
+      dragging = true; moved = false; lastX = e.clientX; lastY = e.clientY
+      pendingDX = 0; pendingDY = 0
       canvas.setPointerCapture && canvas.setPointerCapture(e.pointerId)
     })
     canvas.addEventListener('pointermove', (e) => {
       if (!dragging) return
-      const dx = e.clientX - sx, dy = e.clientY - sy
-      if (Math.abs(dx) + Math.abs(dy) > 4) moved = true
-      if (window.petBridge && window.petBridge.move) window.petBridge.move(dx, dy)
-      else if (model) { model.x = ox + dx; model.y = oy + dy }
-      sx = e.clientX; sy = e.clientY
+      const dx = e.clientX - lastX, dy = e.clientY - lastY
+      lastX = e.clientX; lastY = e.clientY
+      if (Math.abs(dx) + Math.abs(dy) > 0) moved = true
+      pendingDX += dx; pendingDY += dy
+      scheduleMove()
     })
-    canvas.addEventListener('pointerup', () => {
+    const endDrag = (e) => {
       if (!dragging) return
       dragging = false
+      finishMove()
       if (!moved) sendEvent('tap', {})
+      canvas.releasePointerCapture && e && e.pointerId !== undefined && canvas.releasePointerCapture(e.pointerId)
+    }
+    canvas.addEventListener('pointerup', endDrag)
+    canvas.addEventListener('pointercancel', endDrag)
+    window.addEventListener('beforeunload', () => {
+      if (rafId) cancelAnimationFrame(rafId)
+      rafId = 0; pendingDX = 0; pendingDY = 0
     })
   }
 

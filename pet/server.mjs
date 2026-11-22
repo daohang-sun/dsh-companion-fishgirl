@@ -150,6 +150,8 @@ export function createPetServer(opts = {}) {
   const state = {
     expression: '', motion: '', visible: true, speaking: false,
     speech: '', position: { x: 0, y: 0 }, model: basename(modelDir),
+    // 最近一份共享临场意图（表情/动作/气泡），供像素小屋与院子同步同一状态。
+    lastPresence: null,
   }
   let catalog = { expression: [], motion: [] }
   let manifest = null
@@ -218,6 +220,7 @@ export function createPetServer(opts = {}) {
       if (m) {
         const { writeFile } = await import('node:fs/promises')
         await writeFile(join(__dirname, 'capture.jpg'), Buffer.from(m[2], 'base64'))
+        if (body?.probe) await writeFile(join(__dirname, 'capture-probe.json'), JSON.stringify(body.probe, null, 2))
       }
       return send(res, 200, { ok: !!m })
     }
@@ -238,10 +241,30 @@ export function createPetServer(opts = {}) {
     if (path === '/api/action' && req.method === 'POST') {
       const body = await readBody(req)
       const type = String(body?.type || '')
-      const allowed = ['expression', 'motion', 'say', 'show', 'hide', 'focus', 'reset', 'move', 'click', 'reload']
+      const allowed = ['expression', 'motion', 'say', 'presence', 'show', 'hide', 'focus', 'reset', 'move', 'click', 'reload']
       if (!allowed.includes(type)) return send(res, 400, { error: 'unknown action', allowed })
       const payload = {}
-      if (type === 'expression') {
+      if (type === 'presence') {
+        // 共享临场意图：一份意图同时带表情 + 动作 + 短气泡。
+        // id 用于渲染端去重；expiresAt 让重连时不重播过期动作。
+        const id = typeof body.id === 'string' && body.id.trim() ? body.id.trim().slice(0, 120) : ''
+        const expiresAt = Number(body.expiresAt) || 0
+        const text = String(body.bubble || body.text || '').slice(0, 200)
+        payload.id = id
+        payload.expiresAt = expiresAt
+        if (text) { payload.bubble = text; state.speech = text; state.speaking = !!text }
+        if (body.duration) payload.duration = Math.min(30000, Math.max(1000, Number(body.duration) || 4200))
+        if (body.expression) {
+          const hit = resolveAsset('expression', body.expression, catalog)
+          if (hit) { payload.expression = hit.name; state.expression = hit.name }
+        }
+        if (body.motion) {
+          const hit = resolveAsset('motion', body.motion, catalog)
+          if (hit) { payload.motion = hit.name; payload.motionGroup = hit.group; state.motion = hit.name }
+        }
+        // 记录到 state，供像素小屋/院子读取同一份意图并表现同一状态。
+        state.lastPresence = { id, expiresAt, ...payload, ts: Date.now() }
+      } else if (type === 'expression') {
         const hit = resolveAsset('expression', body.name || body.value, catalog)
         if (!hit) return send(res, 404, { error: 'expression not found', expressions: catalog.expression.map(x => x.name) })
         payload.name = hit.name; payload.file = hit.file
@@ -312,6 +335,7 @@ export function createPetServer(opts = {}) {
         hide: async () => { await enqueue('hide'); state.visible = false; return { ok: true } },
         focus: async () => { await enqueue('focus'); return { ok: true } },
         look_in_mirror: async () => { await enqueue('motion', { name: '默认手切举手' }); return { ok: true } },
+        presence: async () => ({ ok: true, presence: state.lastPresence }),
         update_settings: async () => ({ ok: true, note: 'settings ignored by pet' }),
       }
       const fn = map[tool]

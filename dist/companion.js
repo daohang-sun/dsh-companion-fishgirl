@@ -1010,6 +1010,7 @@ function isRichPet(api) {
 }
 
 // src/index.ts
+var sharedPresence = null;
 var PLUGIN_DIR = (() => {
   try {
     const p = decodeURIComponent(new URL(import.meta.url).pathname).replace(/^\/([A-Za-z]:)/, "$1");
@@ -3148,6 +3149,18 @@ function apply(ctx, config = {}) {
           response.writeHead(code, { "content-type": "application/json; charset=utf-8", "cache-control": "no-store" });
           response.end(JSON.stringify(value));
         };
+        const readParam = (k) => {
+          try {
+            return new URL(request.url || PET_ENDPOINT, "http://127.0.0.1").searchParams.get(k);
+          } catch {
+            return null;
+          }
+        };
+        if ((request.method === "GET" || request.method === "HEAD") && readParam("view") === "presence") {
+          const p = sharedPresence && sharedPresence.expiresAt > Date.now() ? sharedPresence : null;
+          reply(200, { ok: true, presence: p });
+          return;
+        }
         if (!runtimeOpts.petBridgeEnabled) {
           reply(200, { ok: true, enabled: false, connected: false });
           return;
@@ -3158,13 +3171,6 @@ function apply(ctx, config = {}) {
           return;
         }
         const rich = isRichPet(api);
-        const readParam = (k) => {
-          try {
-            return new URL(request.url || PET_ENDPOINT, "http://127.0.0.1").searchParams.get(k);
-          } catch {
-            return null;
-          }
-        };
         if (request.method === "GET" || request.method === "HEAD") {
           const view = readParam("view") || "state";
           try {
@@ -3222,6 +3228,22 @@ function apply(ctx, config = {}) {
                 const decorated = body.expression ? `〔${body.expression}〕${text}` : text;
                 data = await callPet(api, "/say", decorated, 3e4);
               }
+            } else if (rich && action === "presence") {
+              const text = typeof body.bubble === "string" ? body.bubble : typeof body.text === "string" ? body.text : "";
+              const expiresAt = Number(body.expiresAt) || Date.now() + 15e3;
+              const presence = {
+                id: typeof body.id === "string" ? body.id : "",
+                expiresAt,
+                bubble: text,
+                expression: body.expression,
+                motion: body.motion
+              };
+              data = await callPet(api, "/api/action", {
+                type: "presence",
+                ...presence,
+                duration: body.duration
+              }, 3e4);
+              sharedPresence = { ...presence, ts: Date.now() };
             } else if (rich && ["expression", "motion", "show", "hide", "focus", "reset", "move", "click"].includes(action)) {
               data = await callPet(api, "/api/action", {
                 type: action,
@@ -3603,11 +3625,13 @@ ${log.join("\n")}` : "",
     };
     ctx.tools.register(defineTool({
       name: "companion_pet",
-      description: "操作你的 Live2D 桌宠（桌面上的大肥鱼形象）：让它做出表情、动作、说话，或收起/显示。想让她在现实桌面上「真的」做点什么、或用户说「你看你桌宠」时用。op=list 先看可用的表情与动作名；op=status 查当前状态。表情/动作用中文名（如 脸红/爱心眼/黑脸、IDLE/默认手切举手）。仅大肥鱼模式可用。",
+      description: "操作你的 Live2D 桌宠（桌面上的大肥鱼形象）：让它做出表情、动作、说话，或收起/显示。op=presence 可下发一份「临场意图」（表情+动作+短气泡同时作用于桌宠和面板里的像素小屋/院子，让两种形象表现同一状态）；op=list 先看可用的表情与动作名；op=status 查当前状态。表情/动作用中文名（如 脸红/爱心眼/黑脸、IDLE/默认手切举手）。仅大肥鱼模式可用。",
       parameters: {
-        op: { type: "string", description: "操作：list|status|say|expression|motion|show|hide|focus" },
-        text: { type: "string", description: "say 时她说的话" },
-        name: { type: "string", description: "expression/motion 的名字（list 返回的 name）" }
+        op: { type: "string", description: "操作：list|status|say|presence|expression|motion|show|hide|focus" },
+        text: { type: "string", description: "say / presence 时她说的话（短气泡）" },
+        name: { type: "string", description: "expression/motion 的名字（list 返回的 name）" },
+        expression: { type: "string", description: "presence 时的表情名" },
+        motion: { type: "string", description: "presence 时的动作名" }
       },
       output: textOutput,
       async execute(args) {
@@ -3633,11 +3657,25 @@ ${log.join("\n")}` : "",
             await callPet(api, "/api/action", { type: "say", text, expression: args.name }, 15e3);
             return { text: `已让桌宠说：「${text}」` };
           }
+          if (op === "presence") {
+            const text = String(args.text || "").slice(0, 200);
+            const expiresAt = Date.now() + 15e3;
+            const presence = {
+              id: "ai-" + Date.now() + "-" + Math.floor(Math.random() * 1e3),
+              expiresAt,
+              bubble: text,
+              expression: args.expression || args.name || "",
+              motion: args.motion || ""
+            };
+            await callPet(api, "/api/action", { type: "presence", ...presence }, 15e3);
+            sharedPresence = { ...presence, ts: Date.now() };
+            return { text: `已让桌宠和小窝同时进入这个状态${text ? "：「" + text + "」" : ""}。` };
+          }
           if (["expression", "motion", "show", "hide", "focus"].includes(op)) {
             await callPet(api, "/api/action", { type: op, name: args.name }, 15e3);
             return { text: `已让桌宠${op === "expression" ? "做出表情「" + (args.name || "") + "」" : op === "motion" ? "播放动作「" + (args.name || "") + "」" : op === "show" ? "显示" : op === "hide" ? "收起" : "聚焦"}。` };
           }
-          return { text: `不支持的操作「${op}」。可用：list/status/say/expression/motion/show/hide/focus。` };
+          return { text: `不支持的操作「${op}」。可用：list/status/say/presence/expression/motion/show/hide/focus。` };
         } catch (err) {
           return { text: "桌宠没有响应：" + String(err && err.message || err) + "。请确认桌宠程序仍在运行。" };
         }

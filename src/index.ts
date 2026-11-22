@@ -31,6 +31,11 @@ import { normalizeMode, appendStream, searchStream, traceStream, blankTiers, nor
   distillTier, archiveTier, buildStarmap, layoutStarmap, MODE_LABELS } from './memory-modes'
 import { readPetApi, petUnavailableError, callPet, petText, isRichPet } from './pet-bridge'
 
+// 最近一份「共享临场意图」（表情 + 动作 + 短气泡），插件进程内共享，带过期时间。
+// 桌宠进程维护自己的副本（pet/server.mjs 的 state.lastPresence）；这里是插件侧镜像，
+// 供面板的像素小屋 / 院子读取，让两种形象在同一时刻表现同一状态。
+let sharedPresence = null
+
 // 插件目录（ESM 下用 import.meta.url；esbuild 打成单文件后指向 dist/companion.js）
 const PLUGIN_DIR = (() => {
   try {
@@ -2335,14 +2340,20 @@ export function apply(ctx, config = {}) {
       kind: 'exact', path: PET_ENDPOINT,
       handler: async (request, response) => {
         const reply = (code, value) => { response.writeHead(code, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' }); response.end(JSON.stringify(value)) }
+        const readParam = (k) => {
+          try { return new URL(request.url || PET_ENDPOINT, 'http://127.0.0.1').searchParams.get(k) } catch { return null }
+        }
+        // 共享临场意图是插件进程内镜像，不依赖桌宠进程，桥接关闭时也能读到（像素形象仍可表现）。
+        if ((request.method === 'GET' || request.method === 'HEAD') && readParam('view') === 'presence') {
+          const p = sharedPresence && sharedPresence.expiresAt > Date.now() ? sharedPresence : null
+          reply(200, { ok: true, presence: p })
+          return
+        }
         if (!runtimeOpts.petBridgeEnabled) { reply(200, { ok: true, enabled: false, connected: false }); return }
         // 优先找插件自带桌宠目录里的 api.json（相对 dist 的上级 pet/）
         let api = await readPetApi(runtimeOpts.petApiPath, [join(PLUGIN_DIR, '..', 'pet'), join(PLUGIN_DIR, 'pet')])
         if (!api) { reply(200, { ok: true, enabled: true, ...petUnavailableError() }); return }
         const rich = isRichPet(api)
-        const readParam = (k) => {
-          try { return new URL(request.url || PET_ENDPOINT, 'http://127.0.0.1').searchParams.get(k) } catch { return null }
-        }
 
         if (request.method === 'GET' || request.method === 'HEAD') {
           const view = readParam('view') || 'state'
@@ -2386,6 +2397,20 @@ export function apply(ctx, config = {}) {
                 const decorated = body.expression ? `〔${body.expression}〕${text}` : text
                 data = await callPet(api, '/say', decorated, 30000)
               }
+            } else if (rich && action === 'presence') {
+              // 共享临场意图：表情 + 动作 + 短气泡一次下发，桌宠按 id 去重、按 expiresAt 防重播。
+              const text = typeof body.bubble === 'string' ? body.bubble : (typeof body.text === 'string' ? body.text : '')
+              const expiresAt = Number(body.expiresAt) || (Date.now() + 15000)
+              const presence = {
+                id: typeof body.id === 'string' ? body.id : '',
+                expiresAt, bubble: text,
+                expression: body.expression, motion: body.motion,
+              }
+              data = await callPet(api, '/api/action', {
+                type: 'presence', ...presence, duration: body.duration,
+              }, 30000)
+              // 同一份意图镜像到插件侧，供像素小屋 / 院子表现同一状态。
+              sharedPresence = { ...presence, ts: Date.now() }
             } else if (rich && ['expression', 'motion', 'show', 'hide', 'focus', 'reset', 'move', 'click'].includes(action)) {
               data = await callPet(api, '/api/action', { type: action, name: body.name || body.value,
                 x: body.x, y: body.y }, 30000)
@@ -2736,11 +2761,13 @@ export function apply(ctx, config = {}) {
     }
     ctx.tools.register(defineTool({
       name: 'companion_pet',
-      description: '操作你的 Live2D 桌宠（桌面上的大肥鱼形象）：让它做出表情、动作、说话，或收起/显示。想让她在现实桌面上「真的」做点什么、或用户说「你看你桌宠」时用。op=list 先看可用的表情与动作名；op=status 查当前状态。表情/动作用中文名（如 脸红/爱心眼/黑脸、IDLE/默认手切举手）。仅大肥鱼模式可用。',
+      description: '操作你的 Live2D 桌宠（桌面上的大肥鱼形象）：让它做出表情、动作、说话，或收起/显示。op=presence 可下发一份「临场意图」（表情+动作+短气泡同时作用于桌宠和面板里的像素小屋/院子，让两种形象表现同一状态）；op=list 先看可用的表情与动作名；op=status 查当前状态。表情/动作用中文名（如 脸红/爱心眼/黑脸、IDLE/默认手切举手）。仅大肥鱼模式可用。',
       parameters: {
-        op: { type: 'string', description: '操作：list|status|say|expression|motion|show|hide|focus' },
-        text: { type: 'string', description: 'say 时她说的话' },
+        op: { type: 'string', description: '操作：list|status|say|presence|expression|motion|show|hide|focus' },
+        text: { type: 'string', description: 'say / presence 时她说的话（短气泡）' },
         name: { type: 'string', description: 'expression/motion 的名字（list 返回的 name）' },
+        expression: { type: 'string', description: 'presence 时的表情名' },
+        motion: { type: 'string', description: 'presence 时的动作名' },
       },
       output: textOutput,
       async execute(args) {
@@ -2764,11 +2791,21 @@ export function apply(ctx, config = {}) {
             await callPet(api, '/api/action', { type: 'say', text, expression: args.name }, 15000)
             return { text: `已让桌宠说：「${text}」` }
           }
+          if (op === 'presence') {
+            // 临场意图：一份同时驱动桌宠（表情/动作/气泡）与像素小屋/院子的共享状态。
+            const text = String(args.text || '').slice(0, 200)
+            const expiresAt = Date.now() + 15000
+            const presence = { id: 'ai-' + Date.now() + '-' + Math.floor(Math.random() * 1000), expiresAt,
+              bubble: text, expression: args.expression || args.name || '', motion: args.motion || '' }
+            await callPet(api, '/api/action', { type: 'presence', ...presence }, 15000)
+            sharedPresence = { ...presence, ts: Date.now() }
+            return { text: `已让桌宠和小窝同时进入这个状态${text ? '：「' + text + '」' : ''}。` }
+          }
           if (['expression', 'motion', 'show', 'hide', 'focus'].includes(op)) {
             await callPet(api, '/api/action', { type: op, name: args.name }, 15000)
             return { text: `已让桌宠${op === 'expression' ? '做出表情「' + (args.name || '') + '」' : op === 'motion' ? '播放动作「' + (args.name || '') + '」' : op === 'show' ? '显示' : op === 'hide' ? '收起' : '聚焦'}。` }
           }
-          return { text: `不支持的操作「${op}」。可用：list/status/say/expression/motion/show/hide/focus。` }
+          return { text: `不支持的操作「${op}」。可用：list/status/say/presence/expression/motion/show/hide/focus。` }
         } catch (err) {
           return { text: '桌宠没有响应：' + String(err && err.message || err) + '。请确认桌宠程序仍在运行。' }
         }
