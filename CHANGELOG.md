@@ -1,3 +1,13 @@
+## v0.22.4 · 蒙版上限修复脸部图层错位 · 2026-11-22
+
+- **根治：脸部图层错位（对应 B 站动态「5.0 建模被 4.0 SDK 强读、不设蒙版上限」）**：按评论线索实测——模型 moc3 v5 / Core 5.1.0 版本本身匹配，但整模有 **715 drawables / 181 个带蒙版 drawable / 49 个蒙版(clipping)组 / 单 drawable 最多 16 个 mask**；pixi-live2d-display 的 Cubism4 框架 `setupLayoutBounds()` 在 `renderTextureCount<=1` 时上限只有 **36**，49>36 每帧报 `not supported mask count : 13` 并把全部蒙版布局重置为「channel 0、全屏同格」，五官/头发/脸底遮罩互相串位，表现就是脸部图层错位。
+  - 框架 `renderer.initialize(coreModel, e=1)` 的 `e`（renderTextureCount）无配置入口；事后重建 renderer 会丢失纹理绑定与 GL 状态导致白屏（A/B 脚本证实）。
+  - 修复：`renderer.js` 在 `Live2DModel.from()` 之前 patch `Cubism4InternalModel.prototype.init()`，让首次初始化即以 `renderTextureCount=2`（上限 64≥49）创建 renderer，纹理绑定/预乘 alpha 走正常流程。patch 幂等（ `__fishMaskPatched` 标记），失败仅告警不影响加载。
+  - 诊断增强：`window.__fishPet` 新增 `maskPatched` 与 `maskInfo()`（clippingCount/renderTextureCount/bufferSize）。
+  - 验证：`verify-mask-fix.mjs` 真实 Chrome 实测 patch 生效、rtCount=2、控制台 zero mask error、截图五官/头发/脸底正常；Node 19 项、presence 9 项、v021 44 项全部通过。
+
+---
+
 ## v0.22.3 · 离散表情无半切换态 + 贴图区域平均 · 2026-11-22
 
 - **修复：脸部“图层错位/灰色张口嘴”观感**：用户截图里的灰色大椭圆嘴来自模型自带的「黑脸」表情（`key1=1`），但旧实现把 exp3 的 `Value` 当增量、并对 `key1..key13` 这类离散开关做 450ms 插值，切换瞬间会停在「眼睛还没切、嘴先切成张口」的中间态，看起来像图层错位。现在 `key*/Clothes*/Movement*` 直接写绝对目标值，连续参数才从默认值淡入；exp3 的 `Value` 按绝对目标处理。自测在写入点采集 70ms 早期值：脸红 `key7=1`、爱心眼 `key4=1`、黑脸 `key1=1`，清除无写入，全部通过。

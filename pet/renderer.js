@@ -13,6 +13,8 @@
  *  - 一次动作只调一次 model.motion()；所有命令进同一 Promise 队列串行执行。
  *  - 拖动位移按 requestAnimationFrame 合并，每帧最多一次 IPC，减少闪烁。
  *  - presence 临场意图带 id 去重 + expiresAt 过期检查，表情/动作/气泡一次到位。
+ *  - 脸部图层错位（v0.22.4）：模型 49 个蒙版组 > 框架默认上限 36，在模型创建前
+ *    patch Cubism4InternalModel.init()，用 renderTextureCount=2（上限 64）初始化。
  */
 
 (function () {
@@ -32,6 +34,7 @@
   // 诊断/自动化探针：暴露真实加载状态，避免只看版本号或猜。
   window.__fishPet = {
     ready: false,
+    maskPatched: false,
     modelLoads: 0,
     repairedLayers: 0,
     expressionCache: 0,
@@ -43,6 +46,16 @@
     paramSnapshot: () => ({}),
     _probeActive: false,
     _probeValues: {},
+    get _model() { return model },  // 诊断只读引用：验证蒙版/渲染配置
+    maskInfo: () => {
+      const r = model && model.internalModel && model.internalModel.renderer
+      if (!r) return null
+      return {
+        clippingCount: typeof r.getClippingMaskCount === 'function' ? r.getClippingMaskCount() : null,
+        renderTextureCount: typeof r.getRenderTextureCount === 'function' ? r.getRenderTextureCount() : null,
+        bufferSize: typeof r.getClippingMaskBufferSize === 'function' ? r.getClippingMaskBufferSize() : null,
+      }
+    },
   }
 
   function showBubble(text, ms) {
@@ -338,6 +351,29 @@
       setHint('Live2D 运行库未加载'); return
     }
     PIXI.utils.isWebGLSupported && PIXI.utils.isWebGLSupported()
+    // 脸部图层错位根因修复（v0.22.4）：
+    // 大肥鱼模型 moc3 v5（Cubism 5 建模）含 49 个蒙版(clipping)组，而
+    // pixi-live2d-display 的 Cubism4 框架默认 renderTextureCount=1 → 蒙版上限 36，
+    // 49>36 触发 "not supported mask count"，框架把所有蒙版布局重置为全屏同格，
+    // 于是五官/头发/脸底的遮罩互相串位，看起来就是「脸部图层错位」。
+    // VTube Studio 会自动调高该上限；这里在模型创建前把默认值设为 2（上限 64）。
+    // 必须在 Live2DModel.from() 之前 patch init()：首次初始化就用 2，纹理绑定和
+    // 预乘 alpha 走正常流程；事后重建 renderer 会丢失 GL 状态导致白屏。
+    try {
+      const IM = PIXI.live2d.Cubism4InternalModel
+      if (IM && IM.prototype && !IM.prototype.__fishMaskPatched) {
+        const origInit = IM.prototype.init
+        IM.prototype.init = function () {
+          const r = origInit.apply(this, arguments)
+          try { this.renderer.initialize(this.coreModel, 2) } catch (e) {
+            console.warn('[大肥鱼] 蒙版上限调整失败', e)
+          }
+          return r
+        }
+        IM.prototype.__fishMaskPatched = true
+        window.__fishPet.maskPatched = true
+      }
+    } catch (e) { console.warn('[大肥鱼] 蒙版 patch 安装失败', e) }
     app = new PIXI.Application({
       view: canvas,
       width: Math.max(240, window.innerWidth),
