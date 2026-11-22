@@ -1,0 +1,42 @@
+MIT License
+
+Copyright (c) 2026 dsh-companion-fishgirl contributors
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+---
+
+第三方素材与运行库说明（不属于本 MIT 授权范围）：
+
+- `assets/cabin/`（2D 像素小屋素材，PNG + layers.json）
+  来源：cabin-world (https://github.com/BabyBus2022/cabin-world)，作者 VADS
+  许可：CC BY 4.0 (https://creativecommons.org/licenses/by/4.0/)
+  要求：署名 VADS + CC BY 4.0（已在 README「致谢与许可」章节署名）
+
+- `pet/vendor/pixi.min.js`
+  来源：pixi.js v6.5.10，许可：MIT
+
+- `pet/vendor/live2dcubismcore.min.js`
+  来源：Live2D Cubism Core (C) 2019 Live2D Inc.
+  许可：Live2D Proprietary Software License Agreement 中的 "Redistributable Code"
+  说明：本仓库不分发任何 Live2D 模型文件与用户数据；模型由用户自行从官方获取
+  并解压到本机，插件仅在运行时读取用户本机路径。
+
+- Live2D 模型文件（本插件**不包含**）：用户需自行从官方渠道获取，
+  模型著作权与授权归原作者，插件仅读取用户本机目录，不作分发。
