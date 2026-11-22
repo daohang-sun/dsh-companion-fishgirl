@@ -1,3 +1,13 @@
+## v0.22.5 · 蒙版缓冲 2048 修复尾巴边缘毛边 · 2026-11-22
+
+- **修复：尾巴蓝雾/边缘毛糙（对应 B 站 UP 主「小北只会摆烂」置顶方案）**：尾巴边缘那圈蓝色雾气不是素材问题，而是 clipping mask buffer 默认仅 **256×256**，模型蒙版多（该模型 49 组）时每格只剩三十几像素，放大到整屏边缘就糊成锯齿毛边。
+  - UP 主给的方案是模型加载后 `renderer._clippingManager.setClippingMaskBufferSize(2048)` 并置空 `_maskTexture`/`_colorBuffer`。当前 vendor 无 `_colorBuffer` 字段，且**实测事后调用 renderer 层 `setClippingMaskBufferSize()` 会白屏**（内部 `new Gt` 但不再 `setGL`，GL 丢失）；直接 new 后手动 setGL 又偏离官方流程。
+  - 最终实现：沿用 v0.22.4 的 `Cubism4InternalModel.init()` patch，在 `renderer.initialize(coreModel, 2)` 之后、**首帧 mask 纹理生成之前**，直接把 `cm._clippingMaskBufferSize = 2048` 并置空 `_maskTexture`/重置 `_currentFrameNo`。保留 GL、无需事后重建，等价且更安全。
+  - 可诊断：`?maskBuf=256` 可切回旧值做 A/B；`window.__fishPet.maskBufferSize` 暴露当前配置。
+  - 验证：`verify-mask-fix.mjs` 5 项全过（READY/patch/rtCount=2/buffer=2048/zero mask error）；`verify-mask-buffer-visual.mjs` 同视口 2x 放大对比确认 256 版鱼尾蓝雾有明显锯齿毛边、2048 版干净平滑；Node 19 + presence 9 + v021 44 全过。帧率无可见下降。
+
+---
+
 ## v0.22.4 · 蒙版上限修复脸部图层错位 · 2026-11-22
 
 - **根治：脸部图层错位（对应 B 站动态「5.0 建模被 4.0 SDK 强读、不设蒙版上限」）**：按评论线索实测——模型 moc3 v5 / Core 5.1.0 版本本身匹配，但整模有 **715 drawables / 181 个带蒙版 drawable / 49 个蒙版(clipping)组 / 单 drawable 最多 16 个 mask**；pixi-live2d-display 的 Cubism4 框架 `setupLayoutBounds()` 在 `renderTextureCount<=1` 时上限只有 **36**，49>36 每帧报 `not supported mask count : 13` 并把全部蒙版布局重置为「channel 0、全屏同格」，五官/头发/脸底遮罩互相串位，表现就是脸部图层错位。

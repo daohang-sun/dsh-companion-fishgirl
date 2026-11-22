@@ -15,6 +15,8 @@
  *  - presence 临场意图带 id 去重 + expiresAt 过期检查，表情/动作/气泡一次到位。
  *  - 脸部图层错位（v0.22.4）：模型 49 个蒙版组 > 框架默认上限 36，在模型创建前
  *    patch Cubism4InternalModel.init()，用 renderTextureCount=2（上限 64）初始化。
+ *  - 尾巴蓝雾/边缘毛边（v0.22.5）：clipping mask buffer 默认 256² 太小，同 patch
+ *    内把 _clippingMaskBufferSize 提到 2048（首帧按新尺寸建纹理），边缘更干净。
  */
 
 (function () {
@@ -35,6 +37,7 @@
   window.__fishPet = {
     ready: false,
     maskPatched: false,
+    maskBufferSize: 0,
     modelLoads: 0,
     repairedLayers: 0,
     expressionCache: 0,
@@ -365,13 +368,29 @@
         const origInit = IM.prototype.init
         IM.prototype.init = function () {
           const r = origInit.apply(this, arguments)
-          try { this.renderer.initialize(this.coreModel, 2) } catch (e) {
-            console.warn('[大肥鱼] 蒙版上限调整失败', e)
+          try {
+            const renderer = this.renderer
+            // (1) 蒙版数量上限：renderTextureCount 1→2（上限 36→64，模型有 49 组）
+            renderer.initialize(this.coreModel, 2)
+            // (2) 蒙版缓冲分辨率：默认 256→2048，消除尾巴蓝雾/边缘毛糙。
+            //     必须直接改字段，不能用 renderer.setClippingMaskBufferSize()：
+            //     后者会 new clippingManager 但不再 setGL，导致白屏（实测）。
+            //     此刻首帧 mask 纹理还没生成，改字段后首帧自然按 2048 创建，
+            //     等价于 UP 主方案里的「置空 _maskTexture 重建」，但更安全。
+            const cm = renderer._clippingManager
+            if (cm && qs.get('maskBuf') !== '256') {  // ?maskBuf=256 仅用于 A/B 诊断对比
+              cm._clippingMaskBufferSize = 2048
+              cm._maskTexture = null  // 保险：确保按新尺寸重建
+              cm._currentFrameNo = 0
+            }
+          } catch (e) {
+            console.warn('[大肥鱼] 蒙版配置调整失败', e)
           }
           return r
         }
         IM.prototype.__fishMaskPatched = true
         window.__fishPet.maskPatched = true
+        window.__fishPet.maskBufferSize = 2048
       }
     } catch (e) { console.warn('[大肥鱼] 蒙版 patch 安装失败', e) }
     app = new PIXI.Application({
