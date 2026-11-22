@@ -177,7 +177,7 @@ window.__ModuleLoader__.load({
       { id: 'memory', label: '跨窗口记忆', detail: '送礼 / 谈心 / 分享 / 约定 的经历', icon: 'memory' },
       { id: 'persona', label: '查看性格成长', detail: '心甲进度 · 当前性格 · 成长路径', icon: 'persona' },
       { id: 'gift', label: '送一份礼物', detail: '提升亲密度（有冷却）', icon: 'gift' },
-      { id: 'home', label: '鱼鱼的小窝', detail: '生活数值 · 种田 · 抽卡 · 记忆星图', icon: 'home' },
+      { id: 'home', label: '鱼鱼的小窝', detail: '生活数值 · 种田 · 画册 · 记忆星图', icon: 'home' },
       { id: 'starmap', label: '记忆星图', detail: '把共同记忆画成星域', icon: 'star' },
       { id: 'export', label: '导出我的数据', detail: '以 JSON 查看全部陪伴数据', icon: 'download' },
       { id: 'forget', label: '清除陪伴数据', detail: '不可撤销', icon: 'trash' },
@@ -321,7 +321,7 @@ window.__ModuleLoader__.load({
             style: selectStyle, onChange: (e) => save({ memoryMode: e.target.value }),
           }, MEMORY_MODES.map(m => h('option', { key: m.id, value: m.id }, m.label)))),
         Row('homeEnabled', '鱼鱼小窝',
-          '侧栏里的小窝面板：生活数值、种田、抽卡、记忆星图。'),
+          '侧栏里的小窝面板：生活数值、种田、画册、记忆星图。'),
         Row('curateOnClose', '会话整理',
           '窗口关闭后，下扇窗口打开时让大肥鱼自己挑选值得长期记住的内容。'),
         Row('petBridgeEnabled', 'Live2D 桌宠桥接',
@@ -333,79 +333,24 @@ window.__ModuleLoader__.load({
     const HOME_PANEL_ID = 'fish-home'
     const HOME_STYLE_ID = 'companion-fishgirl-home-style'
     const HOME_CSS = `
-.fh-wrap{display:flex;flex-direction:column;gap:12px;padding:18px 18px 26px;max-width:820px;margin:0 auto;font-size:13px;color:var(--dsw-alias-label-primary,currentColor)}
+.fh-shell{height:100%;min-height:0;box-sizing:border-box;display:flex;flex-direction:column;gap:12px;overflow:hidden;padding-top:18px;font-size:13px;color:var(--dsw-alias-label-primary,currentColor)}
+.fh-head,.fh-tabs{flex:none;margin-left:18px;margin-right:18px}
+.fh-body{flex:1;min-height:0;overflow-y:auto;overflow-x:hidden;overscroll-behavior-y:contain;padding:0 18px 28px}
+.fh-view{display:flex;flex-direction:column;gap:12px;max-width:920px;margin:0 auto;width:100%}
+.fh-scene-wrap{position:relative}
 .fh-head{display:flex;align-items:flex-start;justify-content:space-between;gap:12px}
 .fh-title{font-size:15px;font-weight:600;letter-spacing:.2px;display:flex;align-items:center;gap:7px}
 .fh-sub{font-size:11.5px;color:var(--dsw-alias-label-secondary,currentColor);margin-top:3px;opacity:.85}
-.fh-ghost{border:.5px solid var(--dsw-alias-border-l2,rgba(127,127,127,.3));background:transparent;color:inherit;padding:5px 12px;border-radius:999px;font-size:12px;cursor:pointer;white-space:nowrap}
-.fh-ghost:hover{border-color:var(--dsw-alias-accent-primary,#3b82f6)}
-.fh-tabs{display:flex;gap:5px;flex-wrap:wrap;padding:3px;border-radius:12px;background:var(--dsw-alias-fill-tertiary,rgba(127,127,127,.07));align-self:flex-start}
-.fh-tab{border:0;background:transparent;color:var(--dsw-alias-label-secondary,currentColor);padding:5px 13px;border-radius:9px;font-size:12px;cursor:pointer;transition:all .18s}
+.fh-ghost{border:1px solid var(--dsw-alias-border-l2,rgba(105,151,177,.24));background:var(--dsw-alias-fill-tertiary,rgba(116,174,197,.06));color:inherit;padding:5px 12px;border-radius:999px;font-size:12px;cursor:pointer;white-space:nowrap;transition:border-color .16s,background .16s,color .16s,opacity .16s}
+.fh-ghost:hover{border-color:var(--dsw-alias-accent-primary,#4a9fc2);background:var(--dsw-alias-fill-secondary,rgba(116,174,197,.12))}
+.fh-ghost:disabled{opacity:.42;cursor:default}
+.fh-tabs{display:flex;gap:5px;flex-wrap:wrap;padding:3px;border-radius:12px;background:var(--dsw-alias-fill-tertiary,rgba(116,174,197,.08));align-self:flex-start;border:1px solid var(--dsw-alias-border-l2,rgba(105,151,177,.16))}
+.fh-tab{border:1px solid transparent;background:transparent;color:var(--dsw-alias-label-secondary,currentColor);padding:5px 13px;border-radius:9px;font-size:12px;cursor:pointer;transition:background .18s,color .18s,border-color .18s,opacity .18s}
+.fh-tab:hover{background:var(--dsw-alias-fill-secondary,rgba(116,174,197,.12));color:var(--dsw-alias-label-primary,currentColor)}
+.fh-tab:disabled{opacity:.42;cursor:default}
 .fh-tab[data-active="true"]{background:var(--dsw-alias-bg-elevated,#fff);color:var(--dsw-alias-label-primary,currentColor);box-shadow:0 1px 4px rgba(40,60,90,.13);font-weight:600}
-.fh-panel{border:.5px solid var(--dsw-alias-border-l2,rgba(127,127,127,.22));border-radius:16px;padding:14px;background:var(--dsw-alias-fill-tertiary,rgba(127,127,127,.04))}
+.fh-panel{border:1px solid var(--dsw-alias-border-l2,rgba(105,151,177,.22));border-radius:16px;padding:14px;background:var(--dsw-alias-fill-tertiary,rgba(116,174,197,.07));box-shadow:0 8px 24px rgba(50,101,132,.05)}
 .fh-panel-title{font-size:12px;font-weight:600;opacity:.8;margin-bottom:9px;display:flex;justify-content:space-between;align-items:center}
-
-/* ── 场景 ── */
-.fh-scene{position:relative;height:330px;border-radius:18px;overflow:hidden;cursor:pointer;isolation:isolate;
-  background:linear-gradient(180deg,#CFEAF6 0%,#A8D6EE 44%,#8CC6E6 80%,#79B4D2 100%);
-  box-shadow:0 8px 26px rgba(52,105,150,.18) inset,0 2px 10px rgba(52,105,150,.10)}
-.fh-scene[data-weather="rain"]{background:linear-gradient(180deg,#B9C9D6 0%,#93A9BC 44%,#7E99AF 80%,#6F8CA3 100%)}
-.fh-scene[data-weather="snow"]{background:linear-gradient(180deg,#E4EEF6 0%,#CBDCEA 44%,#B2CBDD 80%,#A3BFD4 100%)}
-.fh-scene::after{content:"";position:absolute;inset:0;pointer-events:none;z-index:6;
-  background:radial-gradient(120% 80% at 50% 105%,rgba(255,248,230,.55),transparent 60%)}
-.fh-rays{position:absolute;left:-20%;top:-30%;width:80%;height:150%;z-index:1;pointer-events:none;opacity:.5;
-  background:linear-gradient(100deg,rgba(255,255,255,.85),rgba(255,255,255,0) 55%);transform:rotate(8deg);
-  filter:blur(14px);animation:fhRays 9s ease-in-out infinite}
-.fh-sand{position:absolute;left:-6%;right:-6%;bottom:-4%;height:34%;z-index:2;
-  border-radius:44% 56% 0 0/34px 26px 0 0;
-  background:radial-gradient(58% 100% at 36% 0%,#F8EFDA,#EADCC0 70%,#E1D1B3);
-  box-shadow:0 -6px 18px rgba(90,130,160,.10)}
-.fh-weed{position:absolute;left:0;right:0;bottom:0;height:46%;z-index:3;pointer-events:none;opacity:.85}
-.fh-bub{position:absolute;bottom:18%;z-index:4;border-radius:50%;background:radial-gradient(circle at 32% 30%,rgba(255,255,255,.95),rgba(255,255,255,.28) 60%,rgba(255,255,255,.1));
-  box-shadow:0 0 0 .5px rgba(255,255,255,.5) inset;animation:fhBubUp linear infinite;pointer-events:none}
-.fh-rain{position:absolute;inset:-40% 0 0;z-index:5;pointer-events:none;opacity:.55;
-  background-image:repeating-linear-gradient(102deg,rgba(255,255,255,.85) 0 1px,transparent 1px 12px);
-  animation:fhRain .9s linear infinite}
-.fh-snow{position:absolute;inset:0;z-index:5;pointer-events:none;opacity:.9;
-  background-image:radial-gradient(2.4px 2.4px at 20% 10%,#fff,transparent),radial-gradient(2px 2px at 62% 26%,#fff,transparent),radial-gradient(2.8px 2.8px at 84% 12%,#fff,transparent),radial-gradient(1.8px 1.8px at 38% 62%,#fff,transparent);
-  background-size:100% 100%;animation:fhSnow 7s linear infinite}
-.fh-clock{position:absolute;left:12px;top:11px;z-index:8;font-size:11px;padding:4px 9px;border-radius:999px;
-  background:rgba(255,255,255,.66);color:#2C4B6B;backdrop-filter:blur(6px);font-variant-numeric:tabular-nums;
-  display:flex;align-items:center;gap:6px}
-.fh-weathers{position:absolute;right:11px;top:10px;z-index:8;display:flex;gap:3px;padding:3px;border-radius:999px;background:rgba(255,255,255,.6);backdrop-filter:blur(6px)}
-.fh-wbtn{border:0;background:transparent;font-size:12px;line-height:1;padding:4px 6px;border-radius:999px;cursor:pointer;opacity:.55}
-.fh-wbtn[data-on="true"]{background:rgba(255,255,255,.9);opacity:1;box-shadow:0 1px 3px rgba(40,60,90,.15)}
-.fh-girl{position:absolute;left:50%;bottom:40px;width:196px;height:262px;z-index:5;transform:translateX(-50%);
-  animation:fhFloat 4.4s ease-in-out infinite;pointer-events:none;filter:drop-shadow(0 8px 12px rgba(40,80,120,.16))}
-.fh-girl svg{width:100%;height:100%;overflow:visible}
-.fg-tail{transform-box:fill-box;transform-origin:50% 10%;animation:fhTail 2.8s ease-in-out infinite}
-.fg-ahoge{transform-box:fill-box;transform-origin:50% 100%;animation:fhAhoge 3.6s ease-in-out infinite}
-.fg-eye-l,.fg-eye-r{transform-box:fill-box;transform-origin:center;animation:fhBlink 6.2s infinite}
-.fg-eye-r{animation-delay:.06s}
-.fg-eye-closed{display:none}
-.fh-scene[data-mood="sleep"] .fg-eye-l,.fh-scene[data-mood="sleep"] .fg-eye-r{display:none}
-.fh-scene[data-mood="sleep"] .fg-eye-closed{display:block}
-.fh-scene[data-mood="sleep"] .fh-girl{animation:fhSleep 6.4s ease-in-out infinite}
-.fh-scene[data-act="swim"] .fh-girl{animation-duration:2s}
-.fh-scene[data-act="draw"] .fh-girl{animation-duration:5.4s}
-.fh-say{position:absolute;left:calc(50% + 42px);bottom:200px;z-index:9;max-width:180px;padding:8px 11px;border-radius:12px;
-  background:rgba(255,255,255,.92);color:#2C4B6B;font-size:12px;line-height:1.5;box-shadow:0 6px 18px rgba(40,80,120,.18);
-  animation:fhPop .5s ease both}
-.fh-say::after{content:"";position:absolute;left:-5px;bottom:12px;width:10px;height:10px;background:rgba(255,255,255,.92);transform:rotate(45deg)}
-.fh-prop{position:absolute;z-index:7;font-size:38px;line-height:1;pointer-events:none;
-  filter:drop-shadow(0 4px 8px rgba(40,80,120,.18));animation:fhBob 3.2s ease-in-out infinite}
-.fh-prop[data-side="left"]{left:12%;bottom:92px}
-.fh-prop[data-side="right"]{right:11%;bottom:92px}
-.fh-foam{position:absolute;inset:0;z-index:6;pointer-events:none}
-.fh-foam i{position:absolute;border-radius:50%;background:radial-gradient(circle at 34% 30%,rgba(255,255,255,.95),rgba(214,238,250,.5));
-  box-shadow:0 0 0 .5px rgba(255,255,255,.6) inset;animation:fhBubUp 6s linear infinite}
-.fh-zzz{position:absolute;left:calc(50% + 56px);bottom:190px;z-index:9;color:#5E86D6;font-weight:700;font-size:15px}
-.fh-zzz i{position:absolute;font-style:normal;animation:fhZzz 3.2s ease-in-out infinite;opacity:0}
-.fh-scene-foot{position:absolute;left:12px;right:12px;bottom:10px;z-index:8;display:flex;align-items:center;gap:8px;
-  font-size:11.5px;color:#33536F}
-.fh-scene-foot b{font-weight:600}
-.fh-progress{flex:1;height:4px;border-radius:99px;background:rgba(255,255,255,.55);overflow:hidden}
-.fh-progress i{display:block;height:100%;border-radius:99px;background:linear-gradient(90deg,#7FB2EF,#3B5FA8)}
 
 /* ── 数值 / 生活流 ── */
 .fh-vitals{display:grid;grid-template-columns:repeat(3,1fr);gap:8px}
@@ -428,23 +373,21 @@ window.__ModuleLoader__.load({
 .fh-empty{font-size:12px;color:var(--dsw-alias-label-secondary,currentColor);padding:10px 0;opacity:.8}
 
 /* ── 院子 ── */
-.fh-yard{padding:12px;border-radius:14px;background:linear-gradient(180deg,#FBF3E4,#F0E3C9);border:.5px solid rgba(180,150,110,.3)}
-.fh-plots{display:grid;grid-template-columns:repeat(3,1fr);gap:9px}
-.fh-plot{position:relative;aspect-ratio:1;border-radius:13px;cursor:pointer;overflow:hidden;
-  background:linear-gradient(180deg,#F8EFDD,#EADCC0);border:.5px solid rgba(178,148,108,.4);
-  display:flex;flex-direction:column;align-items:center;justify-content:center;gap:3px;transition:all .18s}
-.fh-plot:hover{transform:translateY(-1px);box-shadow:0 5px 14px rgba(150,120,70,.16)}
-.fh-plot[data-ready="true"]{border-color:#D9A63C;box-shadow:0 0 0 1.5px #E7BE6A inset,0 4px 14px rgba(217,166,60,.25)}
-.fh-plot[data-empty="true"]{background:repeating-linear-gradient(45deg,#F3E8D2 0 7px,#EFE2C8 7px 14px)}
-.fh-plot-emoji{font-size:26px;line-height:1;filter:drop-shadow(0 2px 3px rgba(120,90,50,.2))}
-.fh-plot-name{font-size:10.5px;color:#6B5636;font-weight:600}
-.fh-plot-state{font-size:10px;color:#8A7351}
-.fh-plot-plus{font-size:20px;color:#B8A283}
-.fh-ring{position:absolute;right:5px;top:5px;width:20px;height:20px;transform:rotate(-90deg)}
-.fh-ring circle{fill:none;stroke-width:3}
+.fh-yard-scene{position:relative;width:100%;aspect-ratio:3/2;overflow:hidden;border-radius:8px;box-sizing:border-box;
+  background:#839477;touch-action:manipulation;isolation:isolate;border:2px solid #7D887A}
+.fh-yard-scene canvas{display:block;width:100%;height:100%;image-rendering:pixelated;image-rendering:crisp-edges}
+.fh-yard-plot-hit{position:absolute;width:12.5%;height:15%;transform:translate(-50%,-50%);
+  border:0;padding:0;background:transparent;cursor:pointer;border-radius:0}
+.fh-yard-plot-hit:hover{box-shadow:inset 0 0 0 2px rgba(238,226,190,.42)}
+.fh-yard-plot-hit:focus-visible{outline:2px solid #F2D68C;outline-offset:2px}
+.fh-yard-plot-hit[data-ready="true"]::after{content:'';position:absolute;right:13%;top:15%;width:6px;height:6px;
+  background:#E8C46A;box-shadow:0 0 0 2px rgba(66,54,38,.5)}
+.fh-yard-plot-hit[data-watered="true"]::after{content:'';position:absolute;left:15%;top:16%;width:4px;height:4px;
+  background:#8FC0D4;box-shadow:0 0 0 1px rgba(52,74,86,.4)}
 .fh-shop{display:grid;grid-template-columns:repeat(auto-fill,minmax(104px,1fr));gap:7px}
 .fh-shop-item{border:.5px solid var(--dsw-alias-border-l2,rgba(127,127,127,.25));border-radius:10px;padding:7px 8px;
-  display:flex;align-items:center;gap:6px;cursor:pointer;background:var(--dsw-alias-bg-elevated,rgba(255,255,255,.55));font-size:11.5px}
+  display:flex;align-items:center;gap:6px;cursor:pointer;background:var(--dsw-alias-bg-elevated,rgba(255,255,255,.55));font-size:11.5px;
+  color:inherit;font-family:inherit;text-align:left;width:100%;box-sizing:border-box}
 .fh-shop-item:hover{border-color:var(--dsw-alias-accent-primary,#3b82f6)}
 .fh-shop-item[data-sel="true"]{border-color:var(--dsw-alias-accent-primary,#3b82f6);box-shadow:0 0 0 1px var(--dsw-alias-accent-primary,#3b82f6) inset}
 .fh-bag{display:flex;gap:6px;flex-wrap:wrap;font-size:11.5px}
@@ -452,7 +395,7 @@ window.__ModuleLoader__.load({
 .fh-select{border:.5px solid var(--dsw-alias-border-l2,rgba(127,127,127,.3));background:var(--dsw-alias-bg-elevated,#fff);
   color:inherit;padding:5px 8px;border-radius:8px;font-size:12px}
 
-/* ── 画册 / 抽卡 / 星图 ── */
+/* ── 画册 / 星图 ── */
 .fh-gallery{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:10px}
 .fh-art{border-radius:12px;overflow:hidden;border:.5px solid var(--dsw-alias-border-l2,rgba(127,127,127,.25));
   background:var(--dsw-alias-bg-elevated,rgba(255,255,255,.55));animation:fhPop .45s ease both}
@@ -460,45 +403,15 @@ window.__ModuleLoader__.load({
 .fh-art-cap{padding:6px 9px 8px;font-size:11.5px;display:flex;justify-content:space-between;gap:6px;align-items:baseline}
 .fh-art-cap b{font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .fh-art-cap i{font-style:normal;opacity:.65;font-size:10.5px;flex:none}
-.fh-pools{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:10px}
-.fh-pool{flex:1 1 140px;border:.5px solid var(--dsw-alias-border-l2,rgba(127,127,127,.3));border-radius:12px;padding:11px 12px;
-  cursor:pointer;background:var(--dsw-alias-bg-elevated,rgba(255,255,255,.55));transition:all .18s;min-width:140px}
-.fh-pool:hover{transform:translateY(-1px)}
-.fh-pool[data-sel="true"]{border-color:#3B5FA8;box-shadow:0 0 0 1px #3B5FA8 inset;background:linear-gradient(135deg,rgba(120,160,220,.16),rgba(255,255,255,.2))}
-.fh-pool b{display:block;font-size:12.5px;margin-bottom:2px}
-.fh-pool i{font-style:normal;font-size:11px;opacity:.7}
-.fh-cards{display:grid;grid-template-columns:repeat(auto-fill,minmax(108px,1fr));gap:8px}
-.fh-card-item{border-radius:11px;padding:10px 8px;text-align:center;font-size:11.5px;position:relative;overflow:hidden;
-  background:linear-gradient(160deg,#F4F8FF,#E3EDFB);border:.5px solid rgba(120,150,200,.35);animation:fhFlip .5s ease both}
-.fh-card-item[data-r="5"]{background:linear-gradient(160deg,#FFF6E2,#F7E4B8);border-color:#E0B85C}
-.fh-card-item[data-r="6"]{background:linear-gradient(160deg,#F1E9FF,#DCCBFB);border-color:#A98BE0;box-shadow:0 0 14px rgba(150,120,220,.28)}
-.fh-card-item b{display:block;font-size:11.5px;margin-top:4px;line-height:1.35}
-.fh-card-star{font-size:10px;letter-spacing:1px;color:#C8963A}
-.fh-card-item[data-r="6"] .fh-card-star{color:#7B5BC4}
 .fh-star{width:100%;height:auto;max-height:440px;border-radius:14px;background:radial-gradient(70% 60% at 50% 40%,#16203C,#0B1020 75%)}
 .fh-legend{display:flex;gap:14px;flex-wrap:wrap;font-size:11px;color:var(--dsw-alias-label-secondary,currentColor);margin-top:8px}
 .fh-dot{display:inline-block;width:8px;height:8px;border-radius:50%;margin-right:5px;vertical-align:middle}
 .fh-msg{font-size:12px;color:var(--dsw-alias-label-secondary,currentColor);min-height:16px;line-height:1.5}
 
 /* ── 动画 ── */
-@keyframes fhFloat{0%,100%{transform:translate(-50%,0) rotate(-1deg)}50%{transform:translate(-50%,-7px) rotate(1deg)}}
-@keyframes fhSleep{0%,100%{transform:translate(-50%,2px) rotate(-4deg)}50%{transform:translate(-50%,-2px) rotate(-5deg)}}
-@keyframes fhTail{0%,100%{transform:rotate(-7deg)}50%{transform:rotate(9deg)}}
-@keyframes fhAhoge{0%,100%{transform:rotate(-7deg)}50%{transform:rotate(11deg)}}
-@keyframes fhBlink{0%,93%,100%{transform:scaleY(1)}95.5%,97.5%{transform:scaleY(.08)}}
-@keyframes fhBubUp{0%{transform:translateY(0) scale(.55);opacity:0}18%{opacity:.75}100%{transform:translateY(-150px) scale(1.15);opacity:0}}
-@keyframes fhRain{from{background-position:0 0}to{background-position:-60px 200px}}
-@keyframes fhSnow{from{background-position:0 -60%,40% 20%,70% -20%,20% 60%}to{background-position:12px 110%,-30px 120%,50% 130%,-10px 160%}}
 @keyframes fhPop{from{opacity:0;transform:translateY(6px) scale(.97)}to{opacity:1;transform:none}}
-@keyframes fhZzz{0%{opacity:0;transform:translate(0,0) scale(.6)}35%{opacity:1}100%{opacity:0;transform:translate(16px,-30px) scale(1.05)}}
-@keyframes fhBob{0%,100%{transform:translateY(0)}50%{transform:translateY(-5px)}}
-@keyframes fhFlip{from{opacity:0;transform:rotateY(80deg) scale(.9)}to{opacity:1;transform:none}}
-@keyframes fhRays{0%,100%{opacity:.35;transform:rotate(8deg) translateX(0)}50%{opacity:.6;transform:rotate(10deg) translateX(10px)}}
 
-/* ── v0.20.0 2D 像素小屋 + 精灵动画 + Live2D 桌宠桥接 ── */
-.fh-scene-tabs{display:flex;gap:4px;padding:3px;border-radius:10px;background:rgba(127,127,127,.08);align-self:flex-start}
-.fh-scene-tab{border:0;background:transparent;color:var(--dsw-alias-label-secondary,currentColor);padding:4px 10px;border-radius:7px;font-size:11px;cursor:pointer}
-.fh-scene-tab[data-on="true"]{background:var(--dsw-alias-bg-elevated,#fff);color:var(--dsw-alias-label-primary,currentColor);font-weight:600;box-shadow:0 1px 3px rgba(40,60,90,.12)}
+/* ── v0.20.0 2D 像素小屋 + Live2D 桌宠桥接 ── */
 .fh-pixel{position:relative;height:380px;border-radius:14px;overflow:hidden;background:#E4EDF3;box-shadow:0 6px 20px rgba(20,30,60,.16);cursor:pointer;touch-action:none;isolation:isolate}
 .fh-pixel:active{cursor:grabbing}
 .fh-pixel canvas{display:block;width:100%;height:100%;image-rendering:pixelated;image-rendering:crisp-edges}
@@ -509,22 +422,6 @@ window.__ModuleLoader__.load({
   animation:fhPop .4s ease both}
 .fh-pixel-tip{position:absolute;right:9px;bottom:9px;z-index:4;font-size:10px;color:rgba(234,242,255,.75);pointer-events:none;text-shadow:0 1px 2px rgba(0,0,0,.5)}
 .fh-pixel-prop{position:absolute;z-index:3;pointer-events:none;font-size:22px;filter:drop-shadow(0 2px 3px rgba(0,0,0,.4));transition:left .6s,top .6s}
-
-/* 精灵表情切换：同一张 SVG，靠 data-face 显示/隐藏对应部件 */
-.fg-face{display:none}
-.fh-scene[data-face="happy"] .fg-face-happy,.fh-scene[data-face="shy"] .fg-face-shy,
-.fh-scene[data-face="sleep"] .fg-face-sleep,.fh-scene[data-face="sad"] .fg-face-sad,
-.fh-scene[data-face="wink"] .fg-face-wink{display:block}
-.fh-scene[data-face="happy"] .fg-eye-l,.fh-scene[data-face="happy"] .fg-eye-r,
-.fh-scene[data-face="shy"] .fg-eye-l,.fh-scene[data-face="shy"] .fg-eye-r,
-.fh-scene[data-face="sad"] .fg-eye-l,.fh-scene[data-face="sad"] .fg-eye-r,
-.fh-scene[data-face="wink"] .fg-eye-r{display:none}
-.fh-scene[data-face="sleep"] .fg-eye-l,.fh-scene[data-face="sleep"] .fg-eye-r{display:none}
-.fh-girl{cursor:pointer;pointer-events:auto;transition:transform .25s cubic-bezier(.2,.9,.3,1)}
-.fh-girl:active{transform:translateX(-50%) scale(.94)}
-.fh-scene[data-drag="true"] .fh-girl{animation:none;transition:none}
-.fh-blush-strong{opacity:0;transition:opacity .3s}
-.fh-scene[data-face="shy"] .fh-blush-strong{opacity:1}
 
 /* Live2D 桌宠桥接卡片 */
 .fh-pet-hero{display:flex;align-items:center;gap:13px;padding:15px;border-radius:14px;
@@ -543,7 +440,17 @@ window.__ModuleLoader__.load({
 .fh-pet-btn b{display:block;font-size:15px;margin-bottom:3px}
 .fh-input{border:.5px solid var(--dsw-alias-border-l2,rgba(127,127,127,.3));border-radius:9px;padding:7px 10px;
   background:var(--dsw-alias-bg-elevated,#fff);color:inherit;font-size:12px;width:100%;box-sizing:border-box;font-family:inherit}
-@media (prefers-reduced-motion: reduce){.fh-girl,.fh-bub,.fh-rain,.fh-snow,.fg-tail,.fg-ahoge,.fg-eye-l,.fg-eye-r,.fh-rays,.fh-prop,.fh-pixel-say{animation:none !important}}
+.fh-chip:focus-visible,.fh-tab:focus-visible,.fh-ghost:focus-visible,.fh-select:focus-visible,.fh-input:focus-visible,.fh-shop-item:focus-visible,.fh-pet-btn:focus-visible{outline:2px solid var(--dsw-alias-accent-primary,#4a9fc2);outline-offset:2px}
+@media (prefers-reduced-motion: reduce){.fh-shell *,.fh-shell *::before,.fh-shell *::after{animation-duration:.01ms !important;animation-iteration-count:1 !important;transition-duration:.01ms !important}.fh-pixel-say{animation:none !important}}
+@media (max-width:680px){
+.fh-head,.fh-tabs{margin-left:12px;margin-right:12px}
+.fh-body{padding-left:12px;padding-right:12px}
+.fh-tabs{overflow-x:auto;flex-wrap:nowrap;align-self:stretch;scrollbar-width:thin}
+.fh-tab{flex:none}
+.fh-vitals{grid-template-columns:repeat(2,minmax(0,1fr))}
+.fh-gallery{grid-template-columns:1fr}
+.fh-pet-grid{grid-template-columns:repeat(2,minmax(0,1fr))}
+}
 `
 
     function ensureHomeStyle() {
@@ -586,99 +493,6 @@ window.__ModuleLoader__.load({
       moonju: { name: '月华水母', emoji: '🪼' }, nebula: { name: '星云珊瑚', emoji: '✨' },
     }
     const CROP_NAMES = Object.fromEntries(Object.entries(CROP_META).map(([k, v]) => [k, v.name]))
-    const WEATHER_META = [['sunny', '☀️', '晴日'], ['rain', '🌧️', '听雨'], ['snow', '❄️', '落雪']]
-    const PROP_SIDE = {
-      pot: 'left', bowl: 'right', shower: 'left', book: 'right', easel: 'right', garden: 'left',
-      basket: 'left', star: 'right', window: 'right', music: 'left', sofa: 'left', broom: 'right',
-      bubble: 'left', bed: 'right', cup: 'right',
-    }
-    const propArt = {
-      pot: '🍳', bowl: '🍚', shower: '🚿', book: '📖', easel: '🎨', garden: '🌱',
-      basket: '🧺', star: '✨', window: '🪟', music: '🎧', sofa: '🛋️', broom: '🧹',
-      bubble: '🫧', bed: '🛏️', cup: '🍵',
-    }
-    const BUBBLES = [[14, 14, 9, 0], [26, 9, 6, 2.2], [72, 12, 12, 1.1], [84, 8, 7, 3.4], [46, 6, 5, 4.2], [60, 16, 10, 2.8]]
-
-    // 场景里的水草 / 珊瑚 / 石头（纯装饰，占位极低）
-    const WEED_SVG = '<svg viewBox="0 0 640 160" preserveAspectRatio="none" style="width:100%;height:100%">'
-      + '<g fill="#7FC0A8" opacity=".5"><path d="M34 160C46 116 22 84 40 44c14 34 4 82 18 116z"/>'
-      + '<path d="M92 160C104 118 86 96 100 66c12 28 2 64 14 94z"/><path d="M566 160c12-44-10-72 6-108 14 32 4 76 18 108z"/>'
-      + '<path d="M614 160c10-36-8-62 6-92 12 26 2 62 14 92z"/></g>'
-      + '<g fill="#A99BE0" opacity=".42"><path d="M520 160c-8-34 10-54 2-82 16 24 14 54 22 82z"/>'
-      + '<path d="M150 160c-6-26 8-42 2-64 14 20 10 42 18 64z"/></g>'
-      + '<g fill="#C9B99B" opacity=".8"><ellipse cx="70" cy="152" rx="26" ry="10"/><ellipse cx="196" cy="156" rx="18" ry="7"/>'
-      + '<ellipse cx="470" cy="154" rx="22" ry="8"/></g>'
-      + '<g fill="#F0E3C8" opacity=".9"><ellipse cx="300" cy="150" rx="34" ry="8"/></g></svg>'
-
-    // Q 版鱼娘：深蓝波浪长发 + 水手领 + 尾鳍，全部内联 SVG，靠 CSS 做呼吸/摆尾/眨眼。
-    const GIRL_SVG = '<svg viewBox="0 0 240 320" aria-hidden="true">'
-      + '<defs>'
-      + '<linearGradient id="fhHair" x1="0" y1="0" x2="0.3" y2="1"><stop offset="0" stop-color="#8FB0EC"/>'
-      + '<stop offset=".55" stop-color="#5B7FD4"/><stop offset="1" stop-color="#3C5BA8"/></linearGradient>'
-      + '<linearGradient id="fhDress" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#FFFFFF"/>'
-      + '<stop offset="1" stop-color="#D8E7FA"/></linearGradient>'
-      + '<linearGradient id="fhEye" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#223E86"/>'
-      + '<stop offset=".6" stop-color="#4E7ED6"/><stop offset="1" stop-color="#9CC6F5"/></linearGradient>'
-      + '<radialGradient id="fhBlush"><stop offset="0" stop-color="#F7A9B8" stop-opacity=".8"/>'
-      + '<stop offset="1" stop-color="#F7A9B8" stop-opacity="0"/></radialGradient>'
-      + '</defs>'
-      // 尾鳍
-      + '<g class="fg-tail"><path d="M120 230c-14 14-28 30-36 50 19 3 36-8 44-24z" fill="#6E9BE0" opacity=".95"/>'
-      + '<path d="M120 230c14 14 28 30 36 50-19 3-36-8-44-24z" fill="#89B4F0" opacity=".92"/>'
-      + '<path d="M120 234c-4 12-6 26-6 40m6-40c4 12 6 26 6 40" stroke="#BBD3F6" stroke-width="2" fill="none" opacity=".75"/></g>'
-      // 身体 + 水手裙
-      + '<path d="M120 148c-24 0-36 18-40 46l-8 42c24 10 72 10 96 0l-8-42c-4-28-16-46-40-46z" fill="url(#fhDress)" stroke="#C9D9F1" stroke-width="1.2"/>'
-      + '<path d="M72 232c24 9 72 9 96 0l-2 8c-24 9-68 9-92 0z" fill="#C9D9F1" opacity=".55"/>'
-      + '<path d="M120 154l-24 12 24 20 24-20z" fill="#3B5FA8"/>'
-      + '<path d="M120 180l-9 6 9 15 9-15z" fill="#E4695E"/>'
-      + '<rect x="92" y="202" width="56" height="5" rx="2.5" fill="#3B5FA8" opacity=".8"/>'
-      // 短袖 + 手臂 + 手（连在身体上，不是浮着的圆）
-      + '<path d="M84 160c-9 5-15 13-17 22l14 5c2-9 6-16 11-20z" fill="#FFFFFF" stroke="#C9D9F1" stroke-width="1"/>'
-      + '<path d="M156 160c9 5 15 13 17 22l-14 5c-2-9-6-16-11-20z" fill="#FFFFFF" stroke="#C9D9F1" stroke-width="1"/>'
-      + '<path d="M78 190v8" stroke="#FDE6DC" stroke-width="12" stroke-linecap="round"/>'
-      + '<path d="M162 190v8" stroke="#FDE6DC" stroke-width="12" stroke-linecap="round"/>'
-      + '<circle cx="78" cy="202" r="7" fill="#FDE6DC"/><circle cx="162" cy="202" r="7" fill="#FDE6DC"/>'
-      // 头
-      + '<circle cx="120" cy="110" r="53" fill="#FDE6DC"/>'
-      // 后发
-      + '<path d="M64 104c-8 42-6 82 4 106 8-24 4-62 8-90z" fill="url(#fhHair)"/>'
-      + '<path d="M176 104c8 42 6 82-4 106-8-24-4-62-8-90z" fill="url(#fhHair)"/>'
-      // 刘海
-      + '<path d="M66 108c-2-42 22-58 54-58s56 16 54 58c-6-20-18-32-30-30-10 2-12 10-24 10s-16-10-26-8c-12 2-24 10-28 28z" fill="url(#fhHair)"/>'
-      + '<path d="M84 76c10-16 62-18 72-2-18-8-56-8-72 2z" fill="#B7CDF4" opacity=".5"/>'
-      // 呆毛 + 侧鳍
-      + '<path class="fg-ahoge" d="M120 52c-4-20 6-30 16-27-8 5-10 15-8 27z" fill="#6E9BE0"/>'
-      + '<path d="M62 92c-10-4-16-12-14-20 8 2 14 8 17 16z" fill="#9FC0F2" opacity=".85"/>'
-      + '<path d="M178 92c10-4 16-12 14-20-8 2-14 8-17 16z" fill="#9FC0F2" opacity=".85"/>'
-      // 眼睛
-      + '<g class="fg-eye-l"><ellipse cx="99" cy="114" rx="11" ry="14" fill="url(#fhEye)"/>'
-      + '<circle cx="95" cy="108" r="4" fill="#fff" opacity=".95"/><circle cx="103" cy="120" r="2.2" fill="#fff" opacity=".75"/></g>'
-      + '<g class="fg-eye-r"><ellipse cx="141" cy="114" rx="11" ry="14" fill="url(#fhEye)"/>'
-      + '<circle cx="137" cy="108" r="4" fill="#fff" opacity=".95"/><circle cx="145" cy="120" r="2.2" fill="#fff" opacity=".75"/></g>'
-      + '<g class="fg-eye-closed"><path d="M89 114q10 9 20 0" stroke="#3B5FA8" stroke-width="2.6" fill="none" stroke-linecap="round"/>'
-      + '<path d="M131 114q10 9 20 0" stroke="#3B5FA8" stroke-width="2.6" fill="none" stroke-linecap="round"/></g>'
-      // 发丝细节
-      + '<path d="M96 84c-6 14-8 30-6 44" stroke="#4166BE" stroke-width="1.8" opacity=".28" fill="none"/>'
-      + '<path d="M144 84c6 14 8 30 6 44" stroke="#4166BE" stroke-width="1.8" opacity=".28" fill="none"/>'
-      // 腮红 / 默认嘴
-      + '<ellipse cx="85" cy="130" rx="11" ry="7" fill="url(#fhBlush)"/>'
-      + '<ellipse cx="155" cy="130" rx="11" ry="7" fill="url(#fhBlush)"/>'
-      + '<path d="M114 134q6 7 12 0" stroke="#C4707E" stroke-width="2" fill="none" stroke-linecap="round"/>'
-      // ── v0.20.0 表情组：靠外层 data-face 切换 ──
-      + '<g class="fg-face fg-face-happy"><path d="M109 132q11 13 22 0z" fill="#C4707E"/>'
-      + '<path d="M108 131q12 15 24 0" stroke="#A8536A" stroke-width="1.6" fill="none"/></g>'
-      + '<g class="fg-face fg-face-shy"><ellipse class="fh-blush-strong" cx="82" cy="130" rx="14" ry="9" fill="#F2789A" opacity=".55"/>'
-      + '<ellipse class="fh-blush-strong" cx="158" cy="130" rx="14" ry="9" fill="#F2789A" opacity=".55"/>'
-      + '<path d="M113 135q7 -6 14 0" stroke="#C4707E" stroke-width="2" fill="none" stroke-linecap="round"/>'
-      + '<path d="M88 112q11 -7 22 0" stroke="#3B5FA8" stroke-width="2.6" fill="none" stroke-linecap="round"/>'
-      + '<path d="M130 112q11 -7 22 0" stroke="#3B5FA8" stroke-width="2.6" fill="none" stroke-linecap="round"/></g>'
-      + '<g class="fg-face fg-face-sleep"><path d="M114 134q6 5 12 0" stroke="#C4707E" stroke-width="2" fill="none" stroke-linecap="round"/></g>'
-      + '<g class="fg-face fg-face-sad"><path d="M112 136q8 -8 16 0" stroke="#A8536A" stroke-width="2.2" fill="none" stroke-linecap="round"/>'
-      + '<path d="M88 120q11 5 22 0" stroke="#3B5FA8" stroke-width="2.2" fill="none" stroke-linecap="round"/>'
-      + '<path d="M130 120q11 5 22 0" stroke="#3B5FA8" stroke-width="2.2" fill="none" stroke-linecap="round"/></g>'
-      + '<g class="fg-face fg-face-wink"><path d="M131 114q10 9 20 0" stroke="#3B5FA8" stroke-width="2.6" fill="none" stroke-linecap="round"/>'
-      + '<path d="M113 133q7 8 14 0" stroke="#C4707E" stroke-width="2" fill="none" stroke-linecap="round"/></g>'
-      + '</svg>'
 
     // 画作：只存 seed，用确定性伪随机在浏览器里画出来（不联网、不存图片）。
     function artRng(seed) {
@@ -787,17 +601,6 @@ window.__ModuleLoader__.load({
           h('span', null, h('i', { className: 'fh-dot', style: { background: '#534AB7' } }), '长期结论')),
         h('div', { className: 'fh-msg', style: { marginTop: 6 } },
           laid.length ? '共 ' + laid.length + ' 个节点 · ' + edges.length + ' 条连线（越亮越重要）' : '还没有记忆节点，多陪它聊聊吧。'))
-    }
-
-    /** 生长进度小环（右上角），p = 0..1 */
-    function Ring({ p }) {
-      const r = 7
-      const c = 2 * Math.PI * r
-      const v = Math.max(0, Math.min(1, Number(p) || 0))
-      return h('svg', { className: 'fh-ring', viewBox: '0 0 20 20' },
-        h('circle', { cx: 10, cy: 10, r, stroke: 'rgba(150,120,70,.22)' }),
-        h('circle', { cx: 10, cy: 10, r, stroke: '#C1963F', 'stroke-linecap': 'round',
-          'stroke-dasharray': c.toFixed(2), 'stroke-dashoffset': (c * (1 - v)).toFixed(2) }))
     }
 
     // ── v0.21.0 2D 像素小屋：真正使用 cabin-world（VADS, CC BY 4.0）的烘焙房间素材 ──
@@ -913,9 +716,9 @@ window.__ModuleLoader__.load({
       const sx = frame * cell, sy = row * cell
       const h = 100, w = h
       const x = g.x - w / 2, y = g.y - h + 8
-      ctx.globalAlpha = .22; ctx.fillStyle = '#25344D'
-      ctx.beginPath(); ctx.ellipse(g.x, g.y + 6, w * .32, 4, 0, 0, Math.PI * 2); ctx.fill()
-      ctx.globalAlpha = 1
+      const shadow = st.shadow || '#6E7C66'
+      const sh = [10, 18, 24, 20, 12]
+      for (let i = 0; i < 5; i++) px(ctx, shadow, g.x - sh[i] / 2, g.y + 2 + i * 2, sh[i], 2)
       ctx.drawImage(walk, sx, sy, cell, cell, x, y, w, h)
       if (st.sleeping) {
         ctx.font = 'bold 13px sans-serif'; ctx.fillStyle = '#DCE8FF'
@@ -925,7 +728,821 @@ window.__ModuleLoader__.load({
       }
     }
 
-    function PixelRoom({ snap, act, onModeChange }) {
+    const YARD_W = 960, YARD_H = 640
+    const YARD_PLOTS = [
+      { x: 548, y: 180 }, { x: 668, y: 180 }, { x: 788, y: 180 },
+      { x: 548, y: 304 }, { x: 668, y: 304 }, { x: 788, y: 304 },
+      { x: 548, y: 428 }, { x: 668, y: 428 }, { x: 788, y: 428 },
+    ]
+    const YARD_STYLE = [
+      { w: 96, h: 72, ox: -7, oy: 4, stakes: 'left', rope: true, tuft: 3, shift: 0, seed: 11, decor: 0 },
+      { w: 86, h: 62, ox: 8, oy: -5, stakes: 'corners', rope: false, tuft: 1, shift: 2, seed: 23, decor: 1 },
+      { w: 98, h: 74, ox: -2, oy: 6, stakes: 'right', rope: true, tuft: 4, shift: 1, seed: 37, decor: 2 },
+      { w: 88, h: 66, ox: 6, oy: -6, stakes: 'none', rope: false, tuft: 2, shift: 3, seed: 41, decor: 3 },
+      { w: 96, h: 68, ox: -9, oy: 2, stakes: 'both', rope: true, tuft: 0, shift: 1, seed: 53, decor: 0 },
+      { w: 84, h: 72, ox: 8, oy: -4, stakes: 'left', rope: false, tuft: 4, shift: 0, seed: 67, decor: 1 },
+      { w: 94, h: 60, ox: -5, oy: 5, stakes: 'none', rope: false, tuft: 1, shift: 2, seed: 71, decor: 2 },
+      { w: 98, h: 74, ox: 3, oy: -6, stakes: 'corners', rope: true, tuft: 3, shift: 3, seed: 83, decor: 3 },
+      { w: 86, h: 64, ox: -8, oy: 3, stakes: 'right', rope: false, tuft: 2, shift: 0, seed: 97, decor: 0 },
+    ]
+    const CROP_TONE = { kelp: 0, clam: 1, coral: 2, pearl: 3, anemone: 2, starfish: 1, moonju: 3, nebula: 2 }
+    const YARD_DAY = {
+      sky: ['#C2CDD5', '#B7C4CD', '#ACBAC5', '#A1B1BD'],
+      cloud: ['#D2DBE0', '#C2CED6', '#B2C0CA'],
+      hill: ['#96A5AD', '#8998A1', '#7C8B95'],
+      treeFar: '#6F8178',
+      grass: ['#879180', '#7E8878', '#748070', '#6A7668', '#606C5F'],
+      grassLight: '#949E8D',
+      grassDark: '#586352',
+      path: ['#B8BEB9', '#A9B0AB', '#9AA19D'],
+      soil: ['#7B7266', '#70675B', '#655D52', '#5A534A'],
+      soilLight: '#877D70',
+      wood: ['#97805F', '#877056', '#77624B', '#665441'],
+      woodLight: '#A68D6C',
+      wall: ['#D9D5CB', '#CECABF', '#C1BDB3'],
+      wallSeam: '#B4B0A6',
+      ink: '#4E607E',
+      stone: ['#9FA6A2', '#8F9692', '#7F8682'],
+      window: ['#9DB2BF', '#8CA3B2', '#7B93A3'],
+      windowLight: '#B9CAD4',
+      curtain: ['#7E91A4', '#6F8296', '#607386'],
+      crop: ['#7D9063', '#9DAF7C', '#A79C8A', '#C6BCA8', '#A38A8E', '#C6AEB0', '#93A6AD', '#C3D2D5'],
+      lamp: '#C4B08A',
+    }
+    const YARD_NIGHT = {
+      sky: ['#2E3B49', '#354353', '#3C4B5C', '#435365'],
+      cloud: ['#485869', '#405061', '#384858'],
+      hill: ['#3A4A56', '#334350', '#2C3C49'],
+      treeFar: '#30413B',
+      grass: ['#4B564A', '#445044', '#3D493F', '#36423A', '#303B34'],
+      grassLight: '#525E51',
+      grassDark: '#2A342D',
+      path: ['#5B6562', '#525C59', '#495350'],
+      soil: ['#51493F', '#4A4239', '#433B32', '#3B342B'],
+      soilLight: '#5A5248',
+      wood: ['#62513F', '#564635', '#4B3D2E', '#413427'],
+      woodLight: '#6B5845',
+      wall: ['#8D8C85', '#83827B', '#787770'],
+      wallSeam: '#6E6D67',
+      ink: '#2F3D4B',
+      stone: ['#5F6864', '#56605C', '#4D5753'],
+      window: ['#6C8090', '#5E7281', '#506472'],
+      windowLight: '#F0DB95',
+      curtain: ['#55687A', '#4A5C6E', '#405163'],
+      crop: ['#5E6E4E', '#7D8E66', '#847C6E', '#A79E8C', '#82717A', '#A38F98', '#77889A', '#A5B5C2'],
+      lamp: '#F0D792',
+    }
+
+    function px(ctx, color, x, y, w, h) {
+      ctx.fillStyle = color
+      ctx.fillRect(Math.round(x), Math.round(y), Math.round(w), Math.round(h))
+    }
+
+    function hash2(x, y, seed) {
+      let h = Math.imul(x | 0, 374761393) + Math.imul(y | 0, 668265263) + Math.imul(seed | 0, 1442695041)
+      h = Math.imul(h ^ (h >>> 13), 1274126177)
+      return ((h ^ (h >>> 16)) >>> 0) / 4294967296
+    }
+
+    function dither(ctx, c1, c2, x, y, w, h, cell, seed) {
+      px(ctx, c1, x, y, w, h)
+      for (let yy = 0; yy < h; yy += cell) {
+        for (let xx = 0; xx < w; xx += cell) {
+          if ((Math.floor(xx / cell) + Math.floor(yy / cell) + seed) % 2 === 0) {
+            px(ctx, c2, x + xx, y + yy, Math.min(cell, w - xx), Math.min(cell, h - yy))
+          }
+        }
+      }
+    }
+
+    function speckle(ctx, color, x, y, w, h, density, seed) {
+      for (let yy = y; yy < y + h; yy += 4) {
+        for (let xx = x; xx < x + w; xx += 4) {
+          if (hash2(xx, yy, seed) < density) px(ctx, color, xx, yy, 2, 2)
+        }
+      }
+    }
+
+    function castShadow(ctx, color, x, y, w, h) {
+      px(ctx, color, x + 3, y + h, w - 4, 3)
+      px(ctx, color, x + w, y + 4, 3, h - 5)
+      px(ctx, color, x + w - 1, y + h - 1, 4, 4)
+    }
+
+    function drawYardSky(ctx, st, P) {
+      const night = st.night
+      px(ctx, P.sky[0], 0, 0, YARD_W, 46)
+      dither(ctx, P.sky[0], P.sky[1], 0, 46, YARD_W, 30, 4, 2)
+      px(ctx, P.sky[1], 0, 76, YARD_W, 30)
+      dither(ctx, P.sky[1], P.sky[2], 0, 106, YARD_W, 24, 4, 5)
+      px(ctx, P.sky[2], 0, 130, YARD_W, 18)
+      dither(ctx, P.sky[2], P.sky[3], 0, 148, YARD_W, 12, 2, 7)
+      for (const [cx, cy, s] of [[90, 34, 3], [432, 18, 2], [724, 52, 3]]) {
+        px(ctx, P.cloud[1], cx, cy + 6, 48 * s, 6)
+        px(ctx, P.cloud[0], cx + 4, cy, 40 * s, 6)
+        px(ctx, P.cloud[0], cx + 12, cy - 6, 24 * s, 6)
+        px(ctx, P.cloud[2], cx, cy + 12, 48 * s, 4)
+      }
+      if (night) {
+        for (let i = 0; i < 30; i++) {
+          const sx = 12 + (i * 149) % 936, sy = 8 + (i * 67) % 112
+          px(ctx, i % 6 === 0 ? '#D5D0C2' : '#8FA2B8', sx, sy, i % 6 === 0 ? 2 : 1, i % 6 === 0 ? 2 : 1)
+        }
+        px(ctx, '#D5D0C2', 812, 18, 18, 18)
+        px(ctx, '#B9B39F', 816, 22, 10, 10)
+      } else if (st.weather === 'rain') {
+        px(ctx, P.cloud[2], 470, 26, 180, 34)
+        px(ctx, P.cloud[1], 500, 18, 110, 26)
+        px(ctx, P.cloud[2], 96, 40, 140, 24)
+      }
+      for (let i = 0; i < 13; i++) px(ctx, P.hill[0], i * 78 - 24, 122 + (i % 4) * 6, 104, 40)
+      for (let i = 0; i < 11; i++) px(ctx, P.hill[1], i * 94 - 30, 136 + (i % 3) * 7, 124, 30)
+      for (let i = 0; i < 9; i++) px(ctx, P.hill[2], i * 116 - 40, 150 + (i % 2) * 6, 150, 24)
+      for (let x = -6; x < YARD_W; x += 30) {
+        const hh = 12 + (x * 7) % 15
+        px(ctx, P.treeFar, x, 152 - hh, 26, hh + 2)
+        px(ctx, P.treeFar, x + 5, 146 - hh, 14, hh + 2)
+      }
+    }
+
+    function drawYardGround(ctx, P) {
+      for (let x = 0; x < YARD_W; x += 8) {
+        const hh = 2 + ((hash2(x, 1, 3) * 4) | 0)
+        px(ctx, P.grass[1], x, 150 - hh, 8, hh + 3)
+      }
+      px(ctx, P.grass[1], 0, 150, YARD_W, 120)
+      dither(ctx, P.grass[1], P.grass[0], 0, 150, YARD_W, 34, 4, 3)
+      dither(ctx, P.grass[1], P.grass[2], 0, 262, YARD_W, 30, 4, 6)
+      px(ctx, P.grass[2], 0, 292, YARD_W, 138)
+      dither(ctx, P.grass[2], P.grass[3], 0, 422, YARD_W, 34, 4, 9)
+      px(ctx, P.grass[3], 0, 456, YARD_W, 126)
+      dither(ctx, P.grass[3], P.grass[4], 0, 574, YARD_W, 30, 4, 12)
+      px(ctx, P.grass[4], 0, 604, YARD_W, 36)
+      speckle(ctx, P.grassLight, 0, 160, YARD_W, 460, .06, 13)
+      speckle(ctx, P.grassDark, 0, 160, YARD_W, 460, .08, 21)
+      for (let i = 0; i < 10; i++) {
+        const bx = 40 + (i * 137) % 860, by = 190 + (i * 83) % 400
+        if (bx > 480 && by < 520) continue
+        const bw = 16 + (i * 9) % 32, bh = 6 + (i * 5) % 8
+        const c = i % 2 ? P.grass[0] : P.grass[3]
+        for (let k = 0; k < 2; k++) px(ctx, c, bx + k * 6, by + k * 4, bw - k * 10, 4)
+      }
+      for (let i = 0; i < 58; i++) {
+        const x = 12 + (i * 137) % 928, y = 176 + (i * 89) % 430
+        px(ctx, P.grassDark, x, y, 4, 1)
+        px(ctx, P.grassDark, x + 1, y - 3, 2, 3)
+        px(ctx, P.grassLight, x + 4, y + 1, 2, 1)
+      }
+      for (let i = 0; i < 14; i++) {
+        const x = 20 + (i * 197) % 900, y = 300 + (i * 113) % 250
+        px(ctx, P.grassLight, x, y, 2, 2)
+        px(ctx, P.grassLight, x + 6, y + 3, 2, 2)
+      }
+      for (let i = 0; i < 26; i++) {
+        const x = 20 + (i * 157) % 920, y = 462 + (i * 79) % 140
+        if (x > 480 && x < 884 && y < 522) continue
+        px(ctx, P.grassDark, x, y, 3, 5)
+        px(ctx, P.grass[0], x + 2, y - 3, 2, 5)
+        px(ctx, P.grass[1], x + 5, y - 1, 2, 4)
+      }
+    }
+
+    function drawYardPath(ctx, P) {
+      const stones = []
+      for (let y = 252; y < 404; y += 20) {
+        const j = (hash2(y, 3, 5) * 6) | 0
+        stones.push([218 + j, y, 36 + (j % 3) * 2, 16])
+      }
+      for (let x = 264; x < 528; x += 44) {
+        const j = (hash2(x, 9, 4) * 8) | 0
+        stones.push([x, 384 + (j % 3) * 3, 32 + (j % 2) * 4, 15])
+      }
+      for (const [x, y, w, h] of stones) {
+        px(ctx, P.path[2], x + 1, y + 2, w, h)
+        px(ctx, P.path[1], x, y, w, h - 2)
+        px(ctx, P.path[0], x + 2, y + 1, w - 6, 2)
+        speckle(ctx, P.path[2], x + 2, y + 3, w - 4, h - 4, .2, x + y)
+      }
+    }
+
+    function drawYardCabin(ctx, st, P) {
+      const night = st.night
+      const x = 44, y = 108, w = 272, h = 188
+      const roofL = 20, roofR = 336
+      castShadow(ctx, P.grassDark, x, y, w, h)
+      for (let i = 0; i < 8; i++) {
+        const inset = (7 - i) * 9
+        const ry = 44 + i * 8
+        px(ctx, P.wood[3], roofL + inset, ry, roofR - roofL - inset * 2, 8)
+        for (let t = 0; t < 10; t++) {
+          const tx = roofL + inset + 4 + t * 32 + (i % 2) * 16
+          if (tx + 28 < roofR - inset) px(ctx, P.wood[(hash2(tx, ry, 71) * 3) | 0], tx, ry, 28, 5)
+          if (tx + 30 < roofR - inset) px(ctx, P.wood[3], tx + 28, ry, 2, 8)
+          if (hash2(tx, ry, 73) < .25) px(ctx, P.wood[2], tx + 4, ry + 1, 10, 2)
+        }
+      }
+      px(ctx, P.wood[2], roofL + 52, 38, roofR - roofL - 104, 8)
+      px(ctx, P.woodLight, roofL + 88, 36, roofR - roofL - 176, 3)
+      px(ctx, P.wood[3], roofL - 4, 106, roofR - roofL + 8, 6)
+      for (let i = 0; i < 30; i++) {
+        const ex = roofL + (i * 23) % (roofR - roofL)
+        px(ctx, P.wood[3], ex, 106 + (i % 3) * 2, 6, 2)
+      }
+      px(ctx, P.wood[2], roofL - 2, 112, roofR - roofL + 4, 3)
+      px(ctx, P.wall[1], x, y, w, h)
+      for (let by = 0; by < h; by += 14) {
+        const off = (by / 14) % 2 ? 14 : 0
+        px(ctx, P.wallSeam, x, y + by, w, 2)
+        for (let bx = off; bx < w; bx += 28) px(ctx, P.wallSeam, x + bx, y + by, 2, 14)
+        for (let bx = 4 + off; bx < w - 12; bx += 28) {
+          px(ctx, P.wall[(hash2(bx, by, 7) * 3) | 0], x + bx, y + by + 2, 24, 12)
+          if (hash2(bx, by, 8) < .35) px(ctx, P.wallSeam, x + bx + (hash2(bx, by, 9) * 20 | 0), y + by + 2 + (hash2(bx, by, 10) * 10 | 0), 3, 2)
+        }
+      }
+      speckle(ctx, P.wall[2], x + 4, y + 4, w - 8, h - 8, .12, 33)
+      speckle(ctx, P.wall[0], x + 4, y + 4, w - 8, h - 8, .08, 35)
+      px(ctx, P.stone[1], x, y + h - 10, w, 10)
+      px(ctx, P.stone[2], x, y + h - 4, w, 4)
+      const win = [x + 34, y + 40, 104, 68]
+      px(ctx, P.wood[2], win[0] - 6, win[1] - 6, win[2] + 12, win[3] + 12)
+      for (const [ox, oy] of [[-7, -7], [win[2] + 1, -7], [-7, win[3] + 1], [win[2] - 1, win[3] + 1]]) {
+        px(ctx, P.wall[1], win[0] + ox, win[1] + oy, 4, 4)
+      }
+      px(ctx, P.wood[3], win[0] - 7, win[1] - 7, win[2] + 14, 3)
+      px(ctx, P.woodLight, win[0] - 4, win[1] - 4, win[2] + 8, 2)
+      if (night) {
+        px(ctx, P.windowLight, win[0], win[1], win[2], win[3])
+        px(ctx, '#E3BE72', win[0], win[1] + win[3] - 18, win[2], 18)
+        px(ctx, '#F6E5AE', win[0] + 8, win[1] + 8, 24, 20)
+      } else {
+        for (let gy = 0; gy < win[3]; gy += 12) {
+          for (let gx = 0; gx < win[2]; gx += 16) {
+            const tone = gx < 20 && gy < 16 ? P.windowLight : gx > win[2] - 36 && gy > win[3] - 28 ? P.window[2] : P.window[(hash2(gx, gy, 5) * 2) | 0]
+            px(ctx, tone, win[0] + gx, win[1] + gy, Math.min(16, win[2] - gx), Math.min(12, win[3] - gy))
+          }
+        }
+        px(ctx, P.windowLight, win[0] + 6, win[1] + 6, 14, 5)
+        px(ctx, P.windowLight, win[0] + 10, win[1] + 11, 8, 4)
+        px(ctx, P.window[2], win[0] + win[2] - 30, win[1] + win[3] - 22, 24, 12)
+        px(ctx, P.window[2], win[0] + 4, win[1] + win[3] - 14, win[2] - 10, 6)
+      }
+      px(ctx, P.wood[3], win[0] + 2, win[1], 4, win[3])
+      px(ctx, P.wood[3], win[0] + win[2] / 2 - 2, win[1], 4, win[3])
+      px(ctx, P.wood[3], win[0], win[1] + win[3] / 2 - 2, win[2], 4)
+      px(ctx, P.curtain[1], win[0] - 4, win[1], 14, win[3])
+      px(ctx, P.curtain[2], win[0] - 4, win[1], 4, win[3])
+      px(ctx, P.curtain[0], win[0] - 2, win[1] + 2, 6, win[3] - 4)
+      px(ctx, P.curtain[1], win[0] + win[2] - 10, win[1], 14, win[3])
+      px(ctx, P.curtain[2], win[0] + win[2] + 2, win[1], 4, win[3])
+      px(ctx, P.curtain[0], win[0] + win[2] - 4, win[1] + 2, 6, win[3] - 4)
+      px(ctx, P.wood[2], win[0] - 6, win[1] + win[3] + 6, win[2] + 12, 14)
+      px(ctx, P.wood[3], win[0] - 6, win[1] + win[3] + 18, win[2] + 12, 4)
+      for (let i = 0; i < 5; i++) {
+        px(ctx, i % 2 ? '#A38A8E' : '#B8A6A8', win[0] + 2 + i * 22, win[1] + win[3] + 2, 8, 6)
+        px(ctx, P.grassDark, win[0] + 4 + i * 22, win[1] + win[3] + 8, 4, 5)
+      }
+      const dx = x + 192, dy = y + 68
+      px(ctx, P.wood[2], dx - 6, dy - 6, 70, 122)
+      px(ctx, P.wood[3], dx - 6, dy - 6, 70, 3)
+      px(ctx, P.woodLight, dx - 4, dy - 4, 2, 114)
+      px(ctx, P.wood[1], dx, dy, 58, 116)
+      px(ctx, P.wood[2], dx + 4, dy + 6, 50, 46)
+      px(ctx, P.wood[2], dx + 4, dy + 60, 50, 50)
+      px(ctx, P.wood[3], dx + 4, dy + 52, 50, 4)
+      px(ctx, P.wood[3], dx + 4, dy + 6, 50, 3)
+      px(ctx, night ? '#F1D891' : P.window[0], dx + 14, dy + 14, 30, 24)
+      px(ctx, P.wood[3], dx + 14, dy + 24, 30, 3)
+      px(ctx, P.wood[3], dx + 28, dy + 14, 3, 24)
+      px(ctx, '#C2B184', dx + 45, dy + 62, 5, 5)
+      px(ctx, P.stone[0], dx - 10, dy + 116, 78, 8)
+      px(ctx, P.stone[2], dx - 10, dy + 122, 78, 4)
+      px(ctx, night ? P.lamp : '#C7B072', dx - 18, dy + 6, 8, 10)
+      px(ctx, P.wood[3], dx - 20, dy + 2, 12, 3)
+      const cx = x + 56
+      px(ctx, P.stone[1], cx, 22, 26, 36)
+      px(ctx, P.stone[2], cx - 2, 18, 30, 6)
+      px(ctx, P.stone[0], cx + 4, 24, 8, 12)
+      px(ctx, P.stone[2], cx + 4, 48, 18, 4)
+      if (!night) {
+        px(ctx, '#C6CDD0', cx + 6, 10, 6, 4)
+        px(ctx, '#B6BFC3', cx + 14, 4, 7, 4)
+        px(ctx, '#A9B4B9', cx + 22, -2, 8, 4)
+      }
+    }
+
+    function drawYardWell(ctx, st, P) {
+      const night = st.night
+      castShadow(ctx, P.grassDark, 116, 342, 96, 64)
+      px(ctx, P.stone[2], 116, 344, 96, 62)
+      for (let by = 0; by < 50; by += 12) {
+        const off = (by / 12) % 2 ? 12 : 0
+        px(ctx, P.stone[1], 116, 345 + by, 96, 2)
+        for (let bx = off; bx < 92; bx += 24) px(ctx, P.stone[2], 118 + bx, 347 + by, 2, 10)
+        for (let bx = 2 + off; bx < 88; bx += 24) {
+          px(ctx, P.stone[(hash2(bx, by, 3) * 2) | 0], 118 + bx, 348 + by, 20, 9)
+          if (hash2(bx, by, 4) < .2) px(ctx, P.stone[2], 118 + bx + 4, 348 + by + 2, 5, 3)
+        }
+      }
+      px(ctx, P.grass[1], 116, 344, 4, 4)
+      px(ctx, P.grass[1], 208, 344, 4, 4)
+      px(ctx, P.grass[1], 116, 402, 4, 4)
+      px(ctx, P.grass[1], 208, 402, 4, 4)
+      px(ctx, P.stone[0], 116, 344, 96, 3)
+      px(ctx, P.stone[2], 132, 344, 64, 8)
+      px(ctx, P.window[2], 136, 348, 56, 4)
+      px(ctx, P.window[0], 140, 349, 22, 2)
+      px(ctx, P.window[2], 168, 351, 18, 2)
+      px(ctx, P.wood[2], 114, 396, 100, 8)
+      px(ctx, P.wood[3], 114, 402, 100, 4)
+      px(ctx, P.wood[2], 124, 306, 7, 40)
+      px(ctx, P.wood[2], 197, 306, 7, 40)
+      px(ctx, P.wood[3], 118, 296, 92, 6)
+      px(ctx, P.wood[1], 112, 300, 104, 6)
+      px(ctx, P.wood[3], 120, 290, 88, 5)
+      px(ctx, P.grass[2], 112, 300, 4, 4)
+      px(ctx, P.grass[2], 212, 300, 4, 4)
+      px(ctx, P.woodLight, 128, 301, 72, 2)
+      px(ctx, '#A79B85', 160, 306, 2, 26)
+      px(ctx, P.wood[3], 150, 332, 22, 14)
+      px(ctx, P.stone[0], 154, 336, 14, 8)
+      if (night) px(ctx, P.lamp, 152, 330, 3, 3)
+    }
+
+    function drawYardProps(ctx, st, P) {
+      const night = st.night
+      castShadow(ctx, P.grassDark, 236, 344, 40, 48)
+      px(ctx, P.wood[2], 238, 346, 36, 46)
+      for (let i = 0; i < 4; i++) px(ctx, P.wood[1], 242 + i * 8, 348, 5, 42)
+      px(ctx, P.wood[3], 236, 350, 40, 4)
+      px(ctx, P.wood[3], 236, 380, 40, 4)
+      px(ctx, P.wood[3], 246, 340, 20, 4)
+      px(ctx, P.wood[2], 240, 344, 32, 4)
+      castShadow(ctx, P.grassDark, 286, 358, 46, 38)
+      px(ctx, P.wood[2], 288, 360, 44, 36)
+      px(ctx, P.wood[1], 292, 364, 36, 28)
+      px(ctx, P.wood[3], 292, 364, 36, 3)
+      px(ctx, P.wood[3], 292, 388, 36, 3)
+      px(ctx, P.wood[3], 306, 366, 3, 24)
+      px(ctx, P.woodLight, 294, 376, 12, 2)
+      castShadow(ctx, P.grassDark, 342, 362, 54, 32)
+      for (let i = 0; i < 5; i++) {
+        px(ctx, P.wood[2], 344 + i * 10, 366 + (i % 2) * 4, 9, 9)
+        px(ctx, P.wood[1], 346 + i * 10, 367 + (i % 2) * 4, 5, 4)
+      }
+      px(ctx, P.wood[3], 342, 386, 54, 5)
+      px(ctx, P.wood[3], 368, 388, 18, 3)
+      castShadow(ctx, P.grassDark, 884, 484, 28, 24)
+      px(ctx, P.window[1], 886, 484, 24, 18)
+      px(ctx, P.window[2], 890, 488, 16, 10)
+      px(ctx, P.window[0], 892, 486, 8, 3)
+      px(ctx, P.window[1], 910, 480, 8, 6)
+      px(ctx, P.window[1], 908, 500, 6, 3)
+      px(ctx, P.wood[1], 896, 518, 4, 34)
+      px(ctx, P.stone[0], 890, 548, 14, 5)
+      for (let i = 0; i < 6; i++) {
+        const x = 316 + (i * 23) % 60, y = 408 + (i * 11) % 14
+        px(ctx, P.grassDark, x, y, 3, 5)
+        px(ctx, P.grass[0], x + 1, y - 2, 2, 4)
+      }
+      if (night) {
+        px(ctx, '#C8B574', 292, 344, 2, 2)
+        px(ctx, '#C8B574', 320, 342, 2, 2)
+      }
+    }
+
+    function drawYardTree(ctx, P) {
+      castShadow(ctx, P.grassDark, 388, 296, 60, 46)
+      for (let i = 0; i < 26; i++) {
+        const sx = 390 + (i * 29) % 64, sy = 302 + (i * 13) % 26
+        px(ctx, P.grassDark, sx, sy, 8, 4)
+      }
+      px(ctx, P.wood[2], 404, 172, 26, 158)
+      px(ctx, P.wood[1], 408, 168, 18, 162)
+      px(ctx, P.wood[3], 412, 182, 4, 142)
+      px(ctx, P.wood[3], 426, 190, 14, 6)
+      px(ctx, P.wood[2], 382, 192, 24, 8)
+      px(ctx, P.wood[1], 386, 194, 18, 4)
+      px(ctx, P.wood[2], 430, 216, 26, 8)
+      px(ctx, P.wood[1], 432, 218, 20, 4)
+      const blobs = [[424, 122, 94, 94], [382, 148, 64, 62], [466, 138, 60, 58], [424, 186, 78, 42]]
+      for (const [cx, cy, rw, rh] of blobs) {
+        for (let yy = -rh; yy < rh; yy += 8) {
+          for (let xx = -rw; xx < rw; xx += 8) {
+            const nx = (xx + 4) / rw, ny = (yy + 4) / rh
+            if (nx * nx + ny * ny <= 1) px(ctx, P.grassDark, cx + xx - 2, cy + yy - 2, 12, 12)
+          }
+        }
+        for (let yy = -rh; yy < rh; yy += 8) {
+          for (let xx = -rw; xx < rw; xx += 8) {
+            const nx = (xx + 4) / rw, ny = (yy + 4) / rh
+            if (nx * nx + ny * ny > 1) continue
+            const lit = nx + ny
+            const tone = lit < -.4 ? P.grassLight : lit > .3 ? P.grass[1] : P.grass[0]
+            px(ctx, tone, cx + xx, cy + yy, 8, 8)
+          }
+        }
+      }
+      for (let i = 0; i < 20; i++) {
+        const bx = 366 + (i * 43) % 116, by = 92 + (i * 37) % 102
+        const nx = (bx - 424) / 102, ny = (by - 154) / 102
+        if (nx * nx + ny * ny > 1) continue
+        px(ctx, i % 3 ? P.grassDark : P.grassLight, bx, by, i % 3 ? 8 : 5, i % 3 ? 5 : 3)
+      }
+      for (let i = 0; i < 10; i++) {
+        const bx = 372 + (i * 31) % 100, by = 112 + (i * 41) % 84
+        px(ctx, P.grassDark, bx, by, 4, 4)
+      }
+      for (let i = 0; i < 3; i++) {
+        const hx = 392 + i * 26, hy = 126 + (i % 2) * 20
+        px(ctx, P.grass[2], hx, hy, 10, 7)
+        px(ctx, P.grassDark, hx - 2, hy - 2, 14, 3)
+      }
+      px(ctx, P.grassLight, 396, 108, 18, 6)
+      px(ctx, P.grassLight, 408, 96, 10, 4)
+      px(ctx, P.grass[1], 384, 142, 12, 4)
+      px(ctx, P.grass[1], 452, 166, 10, 4)
+      castShadow(ctx, P.grassDark, 350, 392, 36, 20)
+      px(ctx, P.grass[2], 350, 396, 36, 16)
+      px(ctx, P.grass[1], 356, 390, 26, 14)
+      px(ctx, P.grass[0], 360, 392, 12, 8)
+      castShadow(ctx, P.grassDark, 862, 330, 98, 30)
+      for (let x = 866; x < 958; x += 14) {
+        px(ctx, P.wood[3], x, 336, 6, 24)
+        px(ctx, P.wood[1], x + 2, 336, 3, 21)
+        px(ctx, P.woodLight, x + 2, 336, 3, 2)
+      }
+      px(ctx, P.wood[2], 862, 344, 98, 5)
+      px(ctx, P.wood[1], 862, 346, 98, 2)
+      px(ctx, P.grassDark, 892, 322, 34, 10)
+      px(ctx, P.grass[0], 896, 318, 26, 12)
+      px(ctx, P.grass[1], 904, 320, 14, 8)
+      for (let i = 0; i < 10; i++) {
+        const x = 26 + (i * 173) % 800, y = 456 + (i * 53) % 120
+        if (x > 500 && x < 884 && y < 520) continue
+        px(ctx, i % 2 ? '#BDB38C' : '#CAC4A4', x, y, 2, 2)
+        px(ctx, P.grassDark, x, y + 2, 1, 3)
+      }
+    }
+
+    function drawYardForeground(ctx, st, P) {
+      speckle(ctx, P.grassDark, 0, 566, YARD_W, 74, .2, 44)
+      const fence = (x0, x1) => {
+        for (let x = x0; x < x1; x += 42) {
+          px(ctx, P.wood[3], x, 588, 13, 34)
+          px(ctx, P.wood[1], x + 2, 588, 9, 30)
+          px(ctx, P.woodLight, x + 2, 588, 9, 2)
+        }
+        px(ctx, P.wood[3], x0, 598, x1 - x0, 6)
+        px(ctx, P.wood[1], x0, 600, x1 - x0, 3)
+      }
+      fence(-6, 214)
+      fence(748, 966)
+      for (let i = 0; i < 20; i++) {
+        const x = 10 + (i * 97) % 940
+        px(ctx, P.grassDark, x, 606, 6, 5)
+        px(ctx, P.grass[0], x + 2, 601, 4, 6)
+      }
+      for (const [sx, sy] of [[300, 592], [602, 600], [818, 590]]) {
+        px(ctx, P.stone[2], sx, sy, 14, 8)
+        px(ctx, P.stone[0], sx + 2, sy - 3, 8, 4)
+      }
+    }
+
+    function drawYardCrop(ctx, p, cell, style, P) {
+      const tone = CROP_TONE[cell.crop] ?? 0
+      const leaf = P.crop[tone * 2], light = P.crop[tone * 2 + 1]
+      const stage = cell.ready ? 4 : Math.max(1, Math.min(3, Math.ceil((cell.progress || 0) * 3)))
+      const shell = cell.crop === 'clam' || cell.crop === 'pearl' || cell.crop === 'starfish'
+      const clumps = cell.ready ? 2 + (style.seed % 2) : (style.seed % 4 === 0 ? 1 : 2)
+      const scale = .82 + (style.seed % 4) * .08
+      for (let c = 0; c < clumps; c++) {
+        const cx = Math.round(p.x - style.w / 3 + c * (style.w / 1.9) + ((hash2(c, style.seed, 11) * 8) | 0) - 4)
+        const cy = Math.round(p.y + style.h / 2 - 10 - ((hash2(c, style.seed, 12) * 8) | 0))
+        if (shell) {
+          const w = Math.round((14 + stage * 4) * scale), h = Math.round((8 + stage * 3) * scale)
+          px(ctx, P.soil[3], cx - w / 2, cy, w, 3)
+          px(ctx, leaf, cx - w / 2, cy - h, w, h)
+          px(ctx, light, cx - w / 2 + 2, cy - h, Math.max(4, w - 8), 3)
+          for (let i = 1; i < 4; i++) px(ctx, P.soil[3], cx - w / 2 + i * (w / 4), cy - h + 4, 2, Math.max(2, h - 6))
+          if (stage === 4) px(ctx, '#DDD6C4', cx - 3, cy - h - 4, 3, 3)
+        } else {
+          const h = Math.round((8 + stage * 6) * scale)
+          px(ctx, P.soil[3], cx - 1, cy - h, 3, h + 2)
+          px(ctx, leaf, cx - 8, cy - h + 2, 16, 4)
+          px(ctx, light, cx - 6, cy - h + 2, 12, 2)
+          px(ctx, leaf, cx - 9, cy - h + 9, 18, 4)
+          px(ctx, light, cx - 3, cy - h + 9, 12, 2)
+          if (stage >= 3) px(ctx, leaf, cx - 6, cy - h - 3, 12, 5)
+          if (stage === 4) {
+            px(ctx, leaf, cx - 6, cy - h - 9, 12, 8)
+            px(ctx, light, cx - 4, cy - h - 8, 8, 4)
+            px(ctx, '#DDD6C4', cx - 2, cy - h - 7, 3, 3)
+          }
+        }
+      }
+    }
+
+    function drawYardPlot(ctx, p, cell, style, P) {
+      const w = style.w, h = style.h
+      const x = Math.round(p.x - w / 2 + style.ox)
+      const y = Math.round(p.y - h / 2 + style.oy)
+      px(ctx, P.grassDark, x + 6, y + h - 2, w - 10, 6)
+      px(ctx, P.grassDark, x + w - 2, y + 10, 5, h - 16)
+      const base = [P.soil[1], P.soil[2], P.soil[0]][style.seed % 3]
+      const grassP = .34 + (style.seed % 4) * .08
+      const pattern = [0, 4, 8, 4, 8, 4, 0, 4]
+      for (let yy = 0; yy < h; yy += 8) {
+        const idx = Math.floor(yy / 8)
+        const edge = yy < 10 || yy > h - 16 ? 4 : 0
+        const wl = pattern[(idx + style.seed) % pattern.length] + edge
+        const wr = pattern[(idx + style.seed + 3) % pattern.length] + edge
+        px(ctx, base, x + wl, y + yy, w - wl - wr, 8)
+      }
+      dither(ctx, base, P.soil[3], x + 8, y + h - 18, w - 16, 12, 4, style.seed)
+      for (let i = 0; i < 9; i++) {
+        const sx = x + 6 + ((hash2(i, style.seed, 1) * (w - 26)) | 0)
+        const sy = y + 6 + ((hash2(i, style.seed, 2) * (h - 22)) | 0)
+        const sw = 4 + ((hash2(i, style.seed, 3) * 10) | 0)
+        const sh = 4 + ((hash2(i, style.seed, 4) * 6) | 0)
+        px(ctx, [P.soil[0], P.soil[2], P.soil[1], P.soil[3]][(hash2(i, style.seed, 5) * 4) | 0], sx, sy, sw, sh)
+      }
+      for (let i = 0; i < 3; i++) {
+        const sx = x + 12 + ((hash2(i, style.seed, 51) * (w - 32)) | 0)
+        const sy = y + 10 + ((hash2(i, style.seed, 52) * (h - 28)) | 0)
+        for (let k = 0; k < 4; k++) px(ctx, P.soil[3], sx + k * 4, sy + k * 3, 4, 2)
+      }
+      if (style.decor === 0) {
+        for (let i = 0; i < 10; i++) {
+          const sx = x + 8 + (i * 17) % (w - 18)
+          const sy = y + 10 + (i * 11) % (h - 20)
+          px(ctx, '#A79A7F', sx, sy, 5, 2)
+        }
+      } else if (style.decor === 1) {
+        px(ctx, P.soil[3], x + 12, y + 20, w - 24, 4)
+        px(ctx, P.soil[3], x + 16, y + 36, w - 32, 4)
+        px(ctx, P.soil[3], x + 12, y + 52, w - 24, 3)
+      } else if (style.decor === 2) {
+        const rx = x + w - 32, ry = y + h - 28
+        px(ctx, P.stone[2], rx, ry, 12, 7)
+        px(ctx, P.stone[0], rx + 2, ry - 3, 8, 4)
+        px(ctx, P.stone[1], rx + 14, ry + 4, 8, 5)
+        px(ctx, P.stone[0], rx + 16, ry + 2, 4, 2)
+      } else {
+        for (let i = 0; i < 4; i++) {
+          const gx = x + 6 + (i * 21) % (w - 14)
+          const gy = y + 6 + (i * 17) % (h - 12)
+          px(ctx, P.grassDark, gx, gy, 4, 5)
+          px(ctx, P.grass[0], gx + 2, gy - 3, 2, 4)
+        }
+      }
+      for (let i = 0; i < w; i += 8) {
+        if (hash2(i, style.seed, 35) < .5) px(ctx, P.soilLight, x + 6 + i, y + 4 + ((hash2(i, style.seed, 36) * 3) | 0), 6, 2)
+      }
+      for (let i = 0; i < 4; i++) {
+        const sx = x + 10 + ((hash2(i, style.seed, 44) * (w - 20)) | 0)
+        const sy = y + 8 + ((hash2(i, style.seed, 45) * (h - 18)) | 0)
+        px(ctx, P.stone[1], sx, sy, 4, 3)
+        px(ctx, P.stone[0], sx + 1, sy, 2, 1)
+      }
+      for (let i = 0; i < 6; i++) {
+        const sx = x + ((hash2(i, style.seed, 41) * (w + 16)) | 0) - 8
+        const sy = y + ((hash2(i, style.seed, 42) * (h + 12)) | 0) - 6
+        if (sx > x + 4 && sx < x + w - 12 && sy > y + 4 && sy < y + h - 10) continue
+        px(ctx, P.soil[(hash2(i, style.seed, 43) * 3) | 0], sx, sy, 8, 4)
+      }
+      speckle(ctx, P.soil[0], x + 8, y + 6, w - 16, h - 12, .18, style.seed)
+      speckle(ctx, P.soil[3], x + 8, y + 6, w - 16, h - 12, .12, style.seed + 5)
+      for (let i = 0; i < w; i += 4) {
+        if (hash2(i, style.seed, 23) < grassP) px(ctx, P.grass[1], x + i, y, Math.min(6, w - i), 4)
+        if (hash2(i, style.seed, 24) < grassP) px(ctx, P.grass[2], x + i, y + h - 4, Math.min(6, w - i), 4)
+      }
+      for (let i = 0; i < h; i += 4) {
+        if (hash2(i, style.seed, 25) < grassP) px(ctx, P.grass[1], x, y + i, 4, Math.min(6, h - i))
+        if (hash2(i, style.seed, 26) < grassP) px(ctx, P.grass[2], x + w - 4, y + i, 4, Math.min(6, h - i))
+      }
+      for (let i = 0; i < w; i += 6) {
+        const gi = ((i / 6 + style.shift) | 0) % 2
+        if (hash2(i, style.seed, 6) < .45) {
+          px(ctx, gi ? P.grass[1] : P.grass[0], x + i, y - 1 + ((hash2(i, style.seed, 7) * 3) | 0), 4, 2)
+        }
+        if (hash2(i, style.seed, 8) < .35) px(ctx, P.grassDark, x + i + 1, y + h - 1, 4, 2)
+      }
+      for (const [gx, gy] of [[x, y], [x + w - 6, y], [x, y + h - 6], [x + w - 6, y + h - 6]]) {
+        if (hash2(gx, gy, style.seed) < .5) px(ctx, P.grass[1], gx, gy, 6, 6)
+      }
+      const tuft = [[x - 3, y + 6], [x + w - 2, y + h - 12], [x + 4, y + h - 4], [x + w - 10, y + 2]]
+      for (let i = 0; i < style.tuft; i++) {
+        const [tx, ty] = tuft[i]
+        px(ctx, P.grassDark, tx, ty, 3, 5)
+        px(ctx, P.grass[0], tx + 1, ty - 2, 2, 4)
+        px(ctx, P.grass[1], tx + 3, ty + 1, 2, 4)
+      }
+      if (style.stakes === 'left' || style.stakes === 'both' || style.stakes === 'corners') {
+        px(ctx, P.wood[3], x - 5, y + 2, 8, 32)
+        px(ctx, '#C9BDA6', x - 5, y + 2, 8, 3)
+        px(ctx, P.wood[2], x - 3, y + 6, 2, 22)
+      }
+      if (style.stakes === 'right' || style.stakes === 'both' || style.stakes === 'corners') {
+        px(ctx, P.wood[3], x + w - 3, y + 2, 8, 32)
+        px(ctx, '#C9BDA6', x + w - 3, y + 2, 8, 3)
+        px(ctx, P.wood[2], x + w - 1, y + 6, 2, 22)
+      }
+      if (style.stakes === 'corners') {
+        px(ctx, P.wood[3], x - 5, y + h - 30, 8, 28)
+        px(ctx, '#C9BDA6', x - 5, y + h - 30, 8, 2)
+        px(ctx, P.wood[3], x + w - 3, y + h - 30, 8, 28)
+        px(ctx, '#C9BDA6', x + w - 3, y + h - 30, 8, 2)
+      }
+      if (style.rope) {
+        for (let i = 0; i < w; i += 4) {
+          px(ctx, '#C9BDA6', x + i, y + 24 + ((i / 28) | 0) % 2, 4, 1)
+          px(ctx, '#8F8470', x + i, y + 25 + ((i / 28) | 0) % 2, 4, 1)
+        }
+      }
+      if (cell && cell.watered) {
+        for (let i = 0; i < 8; i++) {
+          const wx = x + 4 + ((hash2(i, style.seed, 9) * (w - 10)) | 0)
+          const wy = y + 4 + ((hash2(i, style.seed, 10) * (h - 10)) | 0)
+          px(ctx, P.soil[3], wx, wy, 4, 2)
+        }
+        px(ctx, P.window[0], x + w - 16, y + 6, 2, 2)
+      }
+      if (!cell) {
+        for (let i = 0; i < 3; i++) {
+          const mx = x + 10 + i * ((w - 24) / 3)
+          const my = y + h - 16 - (i % 2) * 6
+          px(ctx, P.soil[0], mx, my, 14, 4)
+          px(ctx, P.soilLight, mx + 2, my - 1, 8, 2)
+        }
+        return
+      }
+      drawYardCrop(ctx, p, cell, style, P)
+    }
+
+    function drawYard(ctx, st) {
+      const P = st.night ? YARD_NIGHT : YARD_DAY
+      ctx.clearRect(0, 0, YARD_W, YARD_H)
+      drawYardSky(ctx, st, P)
+      drawYardGround(ctx, P)
+      drawYardPath(ctx, P)
+      drawYardCabin(ctx, st, P)
+      drawYardWell(ctx, st, P)
+      drawYardProps(ctx, st, P)
+      drawYardTree(ctx, P)
+      const garden = st.garden || []
+      const items = YARD_PLOTS.map((p, i) => ({
+        depth: p.y + 34, draw: () => drawYardPlot(ctx, p, garden[i], YARD_STYLE[i], P),
+      }))
+      items.push({
+        depth: st.girl.y + 8,
+        draw: () => drawGirl(ctx, st.girl, { sleeping: st.sleeping, mood: 'awake', t: st.t, shadow: P.grassDark }),
+      })
+      items.sort((a, b) => a.depth - b.depth)
+      for (const item of items) item.draw()
+      for (const [gx, gy] of [[608, 244], [728, 368], [868, 252], [608, 492], [856, 492], [470, 306], [470, 438]]) {
+        px(ctx, P.grassDark, gx, gy, 4, 6)
+        px(ctx, P.grass[0], gx + 2, gy - 4, 3, 6)
+        px(ctx, P.grass[0], gx + 6, gy - 2, 2, 5)
+        px(ctx, P.grass[1], gx + 8, gy, 2, 5)
+      }
+      drawYardForeground(ctx, st, P)
+      if (st.night) {
+        for (let i = 0; i < 8; i++) {
+          const fx = 210 + ((i * 137 + (Math.sin(st.t * .8 + i) * 24) | 0) % 600)
+          const fy = 280 + ((i * 53 + (Math.cos(st.t * .6 + i) * 16) | 0) % 260)
+          const on = (st.t * 2 + i) % 3 < 2
+          px(ctx, on ? '#D8C077' : '#8B8060', fx, fy, 2, 2)
+        }
+      }
+      if (st.weather === 'rain') {
+        for (let i = 0; i < 64; i++) {
+          const rx = (i * 211 + (st.t * 58 | 0)) % YARD_W
+          const ry = (i * 97 + (st.t * 230 | 0)) % YARD_H
+          px(ctx, '#B2C2CC', rx, ry, 1, 7)
+        }
+        speckle(ctx, P.grassDark, 0, 560, YARD_W, 80, .18, 61)
+      } else if (st.weather === 'snow') {
+        for (let i = 0; i < 46; i++) {
+          const sx = (i * 173 + (st.t * 14 | 0)) % YARD_W
+          const sy = (i * 89 + (st.t * 26 | 0)) % YARD_H
+          px(ctx, '#E2E8EA', sx, sy, 2, 2)
+        }
+      }
+    }
+
+    const plotHitStyle = p => ({ left: (p.x / YARD_W * 100) + '%', top: (p.y / YARD_H * 100) + '%' })
+    const plotAriaLabel = (cell, i) => !cell ? '第' + (i + 1) + '块空地，点击播种'
+      : cell.ready ? '第' + (i + 1) + '块菜畦，可以收获'
+      : '第' + (i + 1) + '块菜畦，' + (cell.watered ? '仍在生长' : '点击浇水')
+
+    function PixelYard({ snap, act, selCrop, busy, onNotice }) {
+      const canvasRef = React.useRef(null)
+      const girlRef = React.useRef({ x: 430, y: 512, facing: 'up', step: 0, moving: false, target: null })
+      const busyRef = React.useRef(false)
+      const snapRef = React.useRef(snap)
+      const noticeRef = React.useRef(onNotice)
+      noticeRef.current = onNotice
+      useEffect(() => { snapRef.current = snap }, [snap])
+      useEffect(() => {
+        const canvas = canvasRef.current
+        if (!canvas) return
+        const ctx = canvas.getContext('2d')
+        if (!ctx) return
+        canvas.width = YARD_W
+        canvas.height = YARD_H
+        ctx.imageSmoothingEnabled = false
+        let raf = 0, last = 0, stepT = 0
+        const motion = window.matchMedia ? window.matchMedia('(prefers-reduced-motion: reduce)') : null
+        const drawStill = (ts) => {
+          const s = snapRef.current
+          const hour = s?.clock?.hour ?? 12
+          drawYard(ctx, {
+            night: hour >= 19 || hour < 6, hour, weather: s?.weather || 'sunny', garden: s?.garden || [],
+            girl: girlRef.current, sleeping: !!s?.sleeping, t: ts / 1000,
+          })
+        }
+        const render = (ts) => {
+          if (motion && motion.matches) { drawStill(ts); raf = 0; return }
+          const t = ts / 1000
+          const dt = Math.min(.05, (ts - last) / 1000 || 0)
+          last = ts
+          const s = snapRef.current
+          const g = girlRef.current
+          if (g.target) {
+            const dx = g.target.x - g.x, dy = g.target.y - g.y
+            const dist = Math.hypot(dx, dy)
+            if (dist < 2) { g.target = null; g.moving = false }
+            else {
+              const step = Math.min(96 * dt, dist)
+              g.x += dx / dist * step
+              g.y += dy / dist * step
+              g.facing = Math.abs(dx) > Math.abs(dy) ? (dx > 0 ? 'right' : 'left') : (dy > 0 ? 'down' : 'up')
+              g.moving = true
+              stepT += dt
+              if (stepT > .13) { stepT = 0; g.step++ }
+            }
+          } else g.moving = false
+          const hour = s?.clock?.hour ?? 12
+          drawYard(ctx, {
+            night: hour >= 19 || hour < 6, hour, weather: s?.weather || 'sunny', garden: s?.garden || [],
+            girl: g, sleeping: !!s?.sleeping, t,
+          })
+          raf = requestAnimationFrame(render)
+        }
+        const syncMotion = () => {
+          cancelAnimationFrame(raf)
+          raf = 0
+          if (motion && motion.matches) drawStill(performance.now())
+          else raf = requestAnimationFrame(render)
+        }
+        motion?.addEventListener?.('change', syncMotion)
+        raf = requestAnimationFrame(render)
+        return () => {
+          cancelAnimationFrame(raf)
+          motion?.removeEventListener?.('change', syncMotion)
+          busyRef.current = false
+          girlRef.current.target = null
+          girlRef.current.moving = false
+        }
+      }, [])
+      useEffect(() => {
+        if (!window.matchMedia || !window.matchMedia('(prefers-reduced-motion: reduce)').matches) return
+        const ctx = canvasRef.current?.getContext('2d')
+        if (!ctx) return
+        const hour = snap?.clock?.hour ?? 12
+        drawYard(ctx, {
+          night: hour >= 19 || hour < 6, hour, weather: snap?.weather || 'sunny', garden: snap?.garden || [],
+          girl: girlRef.current, sleeping: !!snap?.sleeping, t: 0,
+        })
+      }, [snap])
+      const operatePlot = (cell, i) => {
+        if (busy || busyRef.current || snap.sleeping) return
+        if (cell && !cell.ready && cell.watered) {
+          noticeRef.current?.('再等等，浇过水了，还有 ' + Math.ceil(cell.remainMs / 60000) + ' 分钟。')
+          return
+        }
+        const op = !cell ? 'plant' : cell.ready ? 'harvest' : 'water'
+        const p = YARD_PLOTS[i]
+        girlRef.current.target = { x: p.x + 44, y: p.y + 58 }
+        busyRef.current = true
+        const request = op === 'plant' ? act('plant', { crop: selCrop, slot: i })
+          : op === 'water' ? act('water', { slot: i })
+          : act('harvest', { slot: i })
+        Promise.resolve(request).finally(() => { busyRef.current = false })
+      }
+      return h('div', { className: 'fh-yard-scene', role: 'group', 'aria-label': '像素院子菜畦' },
+        h('canvas', { ref: canvasRef, 'aria-hidden': 'true' }),
+        (snap.garden || []).map((cell, i) => h('button', {
+          key: i, type: 'button', className: 'fh-yard-plot-hit', 'data-slot': i,
+          'data-ready': cell && cell.ready ? 'true' : 'false',
+          'data-watered': cell && cell.watered ? 'true' : 'false',
+          style: plotHitStyle(YARD_PLOTS[i]),
+          'aria-label': plotAriaLabel(cell, i),
+          onClick: () => operatePlot(cell, i),
+        })))
+    }
+
+    function PixelRoom({ snap, act }) {
       const canvasRef = React.useRef(null)
       const stateRef = React.useRef({
         girl: { x: 480, y: 340, facing: 'down', step: 0, moving: false },
@@ -940,7 +1557,17 @@ window.__ModuleLoader__.load({
         canvas.width = PW; canvas.height = PH
         ctx.imageSmoothingEnabled = false
         let raf = 0, last = 0, stepT = 0
+        const motion = window.matchMedia ? window.matchMedia('(prefers-reduced-motion: reduce)') : null
+        const drawStill = (ts) => {
+          drawCabin(ctx, {
+            hour: snap.clock?.hour ?? 12, weather: snap.weather || 'sunny',
+            sleeping: !!snap.sleeping, actId: snap.activity?.id || 'idle',
+            mood: snap.sleeping ? 'sleep' : (snap.activity?.id === 'pet' ? 'happy' : 'awake'),
+            t: ts / 1000, girl: stateRef.current.girl,
+          })
+        }
         const render = (ts) => {
+          if (motion && motion.matches) { drawStill(ts); raf = 0; return }
           const t = ts / 1000
           const dt = Math.min(0.05, (ts - last) / 1000 || 0); last = ts
           const s = stateRef.current, g = s.girl
@@ -980,8 +1607,29 @@ window.__ModuleLoader__.load({
           })
           raf = requestAnimationFrame(render)
         }
+        const syncMotion = () => {
+          cancelAnimationFrame(raf)
+          raf = 0
+          if (motion && motion.matches) drawStill(performance.now())
+          else raf = requestAnimationFrame(render)
+        }
+        motion?.addEventListener?.('change', syncMotion)
         raf = requestAnimationFrame(render)
-        return () => cancelAnimationFrame(raf)
+        return () => {
+          cancelAnimationFrame(raf)
+          motion?.removeEventListener?.('change', syncMotion)
+        }
+      }, [snap])
+      useEffect(() => {
+        if (!window.matchMedia || !window.matchMedia('(prefers-reduced-motion: reduce)').matches) return
+        const ctx = canvasRef.current?.getContext('2d')
+        if (!ctx) return
+        drawCabin(ctx, {
+          hour: snap?.clock?.hour ?? 12, weather: snap?.weather || 'sunny',
+          sleeping: !!snap?.sleeping, actId: snap?.activity?.id || 'idle',
+          mood: snap?.sleeping ? 'sleep' : (snap?.activity?.id === 'pet' ? 'happy' : 'awake'),
+          t: 0, girl: stateRef.current.girl,
+        })
       }, [snap])
       const toLocal = (e) => {
         const r = canvasRef.current.getBoundingClientRect()
@@ -1040,65 +1688,6 @@ window.__ModuleLoader__.load({
       )
     }
 
-    function Scene({ snap, busy, act, face, setFace }) {
-      if (!snap) return null
-      const a = snap.activity
-      const sleeping = snap.sleeping
-      const prop = a && a.prop
-      const clock = snap.clock || {}
-      const line = sleeping ? '' : (a ? (a.line || a.verb) : '')
-      const progress = a ? Math.max(0, Math.min(1, a.elapsedMs / Math.max(1, a.totalMs))) : 0
-      // 表情优先级：手动切换 > 睡眠 > 活动推断 > 默认
-      const autoFace = sleeping ? 'sleep' : (a && (a.id === 'pet' || a.id === 'music') ? 'happy' : 'awake')
-      return h('div', {
-        className: 'fh-scene', 'data-weather': snap.weather || 'sunny',
-        'data-act': sleeping ? 'sleep' : (a ? a.id : 'idle'),
-        'data-mood': sleeping ? 'sleep' : 'awake',
-        'data-face': face || autoFace,
-        title: '点她摸摸 · 拖着摇一摇',
-        onClick: () => { if (!busy && !sleeping) { act('pet'); setFace && setFace('happy'); setTimeout(() => setFace && setFace(''), 1400) } },
-      },
-        h('div', { className: 'fh-rays' }),
-        h('div', { className: 'fh-sand' }),
-        h('div', { className: 'fh-weed', dangerouslySetInnerHTML: { __html: WEED_SVG } }),
-        BUBBLES.map((b, i) => h('i', {
-          key: 'b' + i, className: 'fh-bub',
-          style: { left: b[0] + '%', bottom: b[1] + '%', width: b[2], height: b[2], animationDuration: (5 + b[3]) + 's', animationDelay: b[3] + 's' },
-        })),
-        snap.weather === 'rain' ? h('div', { className: 'fh-rain' }) : null,
-        snap.weather === 'snow' ? h('div', { className: 'fh-snow' }) : null,
-        // 道具
-        prop && propArt[prop] ? h('div', { className: 'fh-prop', 'data-side': PROP_SIDE[prop] || 'right' }, propArt[prop]) : null,
-        // 洗澡泡泡
-        a && a.id === 'bath' ? h('div', { className: 'fh-foam' },
-          [0, 1, 2, 3, 4, 5, 6].map(i => h('i', {
-            key: 'f' + i,
-            style: { left: (32 + (i * 7) % 40) + '%', bottom: (26 + (i * 11) % 34) + '%',
-              width: 10 + (i * 5) % 16, height: 10 + (i * 5) % 16, animationDelay: (i * 0.7) + 's' },
-          }))) : null,
-        // 角色
-        h('div', { className: 'fh-girl', dangerouslySetInnerHTML: { __html: GIRL_SVG } }),
-        sleeping ? h('div', { className: 'fh-zzz' },
-          h('i', { style: { animationDelay: '0s' } }, 'z'),
-          h('i', { style: { animationDelay: '1s', left: 6, bottom: 12 } }, 'Z'),
-          h('i', { style: { animationDelay: '2s', left: 12, bottom: 26 } }, 'Z')) : null,
-        line ? h('div', { className: 'fh-say', key: a.id + a.startedAt }, line) : null,
-        // 顶栏
-        h('div', { className: 'fh-clock' }, '🕒 ' + String(clock.hour ?? 0).padStart(2, '0') + ':' + String(clock.minute ?? 0).padStart(2, '0')),
-        h('div', { className: 'fh-weathers', onClick: (e) => e.stopPropagation() },
-          WEATHER_META.map(w => h('button', {
-            key: w[0], className: 'fh-wbtn', title: w[2], 'data-on': (snap.weather || 'sunny') === w[0] ? 'true' : 'false',
-            onClick: () => act('weather', { weather: w[0] }),
-          }, w[1]))),
-        // 底部：她正在做什么
-        h('div', { className: 'fh-scene-foot' },
-          sleeping
-            ? h('span', null, '她睡着了…（点「叫醒」或明天见）')
-            : h('span', null, a ? '她' + a.verb + ' · 第 ' + Math.max(1, Math.round(a.elapsedMs / 60000)) + ' 分钟' : '她在屋里待着'),
-          h('span', { className: 'fh-progress' }, h('i', { style: { width: (sleeping ? 100 : progress * 100) + '%' } })))) 
-    }
-
-
     function FishHomePanel({ onBack }) {
       ensureHomeStyle()
       const [snap, setSnap] = React.useState(null)
@@ -1108,17 +1697,30 @@ window.__ModuleLoader__.load({
       const [busy, setBusy] = React.useState(false)
       const [selCrop, setSelCrop] = React.useState('kelp')
       const [selRecipe, setSelRecipe] = React.useState('porridge')
-      const [selPool, setSelPool] = React.useState('sea')
-      const [drawSeq, setDrawSeq] = React.useState(0)
-      // 场景模式：pixel（2D 像素小屋，默认）| sprite（增强的 SVG 精灵立绘）
-      const [sceneMode, setSceneMode] = React.useState('pixel')
-      // 精灵表情：活动/睡眠自动推断，点「逗她」可临时切换
-      const [face, setFace] = React.useState('')
       // Live2D 桌宠桥接
       const [pet, setPet] = React.useState(null)
       const [petTextInput, setPetTextInput] = React.useState('')
       const [petCatalog, setPetCatalog] = React.useState(null)
       const [petEvents, setPetEvents] = React.useState([])
+      const shellRef = React.useRef(null)
+      useEffect(() => {
+        const el = shellRef.current
+        if (!el || typeof ResizeObserver === 'undefined') return
+        const parent = el.parentElement
+        const fitParent = () => {
+          if (!parent || parent.clientHeight <= 0) return
+          el.style.height = parent.clientHeight + 'px'
+        }
+        const observer = new ResizeObserver(fitParent)
+        if (parent) {
+          fitParent()
+          observer.observe(parent)
+        }
+        return () => {
+          observer.disconnect()
+          el.style.height = ''
+        }
+      }, [])
       const petApi = (path, method, body) => homeApi('/api/companion-fishgirl/pet' + path, method, body)
       const petRefresh = () => petApi('', 'GET').then(setPet).catch(e => setPet({ connected: false, error: String(e && e.message || e) }))
       const petLoadCatalog = () => petApi('?view=catalog', 'GET')
@@ -1167,7 +1769,6 @@ window.__ModuleLoader__.load({
           .then((r) => {
             if (r && r.snapshot) setSnap(r.snapshot)
             if (r && r.message) setMsg(r.message)
-            if (op === 'draw') setDrawSeq(n => n + 1)
             return reload(true)
           })
           .catch(e => setMsg(String(e && e.message || e)))
@@ -1178,62 +1779,24 @@ window.__ModuleLoader__.load({
       const title = (text, right) => h('div', { className: 'fh-panel-title' },
         h('span', null, text),
         right ? h('span', { style: { fontWeight: 400, opacity: .65 } }, right) : null)
-      const tabs = [['daily', '此刻'], ['garden', '院子'], ['gallery', '画册'], ['draw', '抽卡'], ['star', '星图'], ['pet', 'Live2D 桌宠']]
+      const tabs = [['daily', '此刻'], ['garden', '院子'], ['gallery', '画册'], ['star', '星图'], ['pet', 'Live2D 桌宠']]
 
-      const gardenCell = (cell, i) => {
-        const meta = cell ? (CROP_META[cell.crop] || { name: cell.crop, emoji: '🌱' }) : null
-        const remainMin = cell ? Math.ceil(cell.remainMs / 60000) : 0
-        return h('div', {
-          key: i, className: 'fh-plot',
-          'data-empty': cell ? 'false' : 'true',
-          'data-ready': cell && cell.ready ? 'true' : 'false',
-          title: cell ? meta.name + (cell.ready ? ' · 可以收了' : ' · 生长中') : '点一下种下选中的种子',
-          onClick: () => {
-            if (!cell) { act('plant', { crop: selCrop, slot: i }); return }
-            if (cell.ready) act('harvest', { slot: i })
-            else if (!cell.watered) act('water', { slot: i })
-            else setMsg('再等等，浇过水了，还有 ' + remainMin + ' 分钟。')
-          },
-        },
-          cell && !cell.ready ? h(Ring, { key: 'r' + i, p: cell.progress }) : null,
-          h('div', { className: 'fh-plot-emoji' }, cell ? meta.emoji : '＋'),
-          h('div', { className: 'fh-plot-name' }, cell ? meta.name : '空地'),
-          h('div', { className: 'fh-plot-state' },
-            cell ? (cell.ready ? '可以收了' : cell.watered ? '已浇水' : remainMin + ' 分钟') : '点一下种'))
-      }
-
-      return h('div', { className: 'fh-wrap' },
-        h('div', { className: 'fh-head' },
-          h('div', null,
-            h('div', { className: 'fh-title' }, h('span', null, '🐟'), '鱼鱼的小窝'),
-            h('div', { className: 'fh-sub' }, '她自己过日子 · 所有大肥鱼窗口共享 · 数据只在本机')),
-          onBack ? h('button', { className: 'fh-ghost', onClick: onBack }, '返回会话') : null),
-        h('div', { className: 'fh-tabs' }, tabs.map(([id, label]) =>
-          h('button', { key: id, className: 'fh-tab', 'data-active': tab === id ? 'true' : 'false',
-            onClick: () => setTab(id) }, label))),
-        !snap ? h('div', { className: 'fh-msg' }, '正在读取小窝…') : null,
+      const currentView = h(React.Fragment, null,
 
         // ── 此刻 ──
         snap && tab === 'daily' ? h('div', { style: { display: 'flex', flexDirection: 'column', gap: 10 } },
-          h('div', { className: 'fh-scene-tabs' },
-            h('button', { key: 'pixel', className: 'fh-scene-tab', 'data-on': sceneMode === 'pixel' ? 'true' : 'false',
-              onClick: () => setSceneMode('pixel') }, '🏠 像素小屋'),
-            h('button', { key: 'sprite', className: 'fh-scene-tab', 'data-on': sceneMode === 'sprite' ? 'true' : 'false',
-              onClick: () => setSceneMode('sprite') }, '🧍 精灵立绘')),
-          sceneMode === 'pixel'
-            ? h(PixelRoom, { snap, act, onModeChange: setSceneMode })
-            : h(Scene, { snap, busy, act, face, setFace }),
+          h('div', { className: 'fh-scene-wrap' },
+            h(PixelRoom, { snap, act }),
+            ),
           h('div', { className: 'fh-chips' },
             chip((snap.autonomy ? '自主生活 · 开' : '自主生活 · 关'), () => act('autonomy', { on: !snap.autonomy }), busy),
-            chip('摸摸头', () => { act('pet'); setFace('shy'); setTimeout(() => setFace(''), 1400) }, busy || snap.sleeping),
-            chip('逗她笑', () => { setFace('happy'); setTimeout(() => setFace(''), 1600) }, busy || snap.sleeping),
+            chip('摸摸头', () => act('pet'), busy || snap.sleeping),
             chip('递杯茶', () => act('act', { activity: 'tea' }), busy || snap.sleeping),
             chip('去画一张', () => act('act', { activity: 'draw' }), busy || snap.sleeping),
-            chip('眨眨眼', () => { setFace('wink'); setTimeout(() => setFace(''), 900) }, busy || snap.sleeping),
             chip('洗个澡', () => act('clean'), busy || snap.sleeping),
             chip(snap.sleeping ? '叫醒她' : '哄她睡觉', () => act(snap.sleeping ? 'wake' : 'sleep'), busy)),
           h('div', { className: 'fh-panel' },
-            title('她的状态', '金币 ' + snap.coins + ' · 卡册 ' + snap.cardCount + ' 张 · 画册 ' + snap.galleryCount + ' 张'),
+            title('她的状态', '金币 ' + snap.coins + ' · 画册 ' + snap.galleryCount + ' 张'),
             h('div', { className: 'fh-vitals' }, VITAL_META.map(m =>
               h(VitalBar, { key: m.k, k: m.k, v: snap.vitals[m.k], label: m.label, icon: m.icon })))),
           h('div', { className: 'fh-panel' },
@@ -1243,12 +1806,16 @@ window.__ModuleLoader__.load({
 
         // ── 院子 ──
         snap && tab === 'garden' ? h('div', { style: { display: 'flex', flexDirection: 'column', gap: 10 } },
-          h('div', { className: 'fh-yard' },
-            h('div', { className: 'fh-plots' }, snap.garden.map((cell, i) => gardenCell(cell, i)))),
+          h('div', { className: 'fh-scene-wrap' },
+            h(PixelYard, { snap, act, selCrop, busy, onNotice: setMsg }),
+            ),
+          h('div', { className: 'fh-msg' },
+            '点菜畦播种 · 再点浇水 · 成熟后收获 · 共 ' + (snap.garden || []).filter(c => c && c.ready).length + ' 块可收'),
           h('div', { className: 'fh-panel' },
             title('种子铺', '先选一种，再买；买完点空地种下'),
-            h('div', { className: 'fh-shop' }, (snap.crops || []).map(c => h('div', {
-              key: c.id, className: 'fh-shop-item', 'data-sel': selCrop === c.id ? 'true' : 'false',
+            h('div', { className: 'fh-shop' }, (snap.crops || []).map(c => h('button', {
+              key: c.id, type: 'button', className: 'fh-shop-item', 'data-sel': selCrop === c.id ? 'true' : 'false',
+              'aria-pressed': selCrop === c.id ? 'true' : 'false',
               onClick: () => setSelCrop(c.id),
             },
               h('span', null, (CROP_META[c.id] || {}).emoji || '🌱'),
@@ -1286,30 +1853,6 @@ window.__ModuleLoader__.load({
                 h('i', null, (PALETTES[p.palette] || {}).name || ''),
                 h('i', null, new Date(p.at).toLocaleDateString())))))
             : h('div', { className: 'fh-empty' }, '画册还空着。她画画时会自己挂上去，也可以让她现在画一张。'))
-        : null,
-
-        // ── 抽卡 ──
-        snap && tab === 'draw' ? h('div', { className: 'fh-panel' },
-          title('卡册', '共 ' + snap.cardCount + ' 张 · 已抽 ' + snap.drawCount + ' 次'),
-          h('div', { className: 'fh-pools' }, (snap.pools || []).map(p => h('div', {
-            key: p.id, className: 'fh-pool', 'data-sel': selPool === p.id ? 'true' : 'false',
-            onClick: () => setSelPool(p.id),
-          },
-            h('b', null, p.name),
-            h('i', null, '顶 ' + p.top + '★ · 20 抽保底')))),
-          h('div', { className: 'fh-chips' },
-            chip('单抽 · 10 金币', () => act('draw', { pool: selPool }), busy),
-            chip('十连 · 100 金币', () => act('draw', { pool: selPool, ten: true }), busy)),
-          h('div', { className: 'fh-panel-title', style: { marginTop: 14 } }, '最近抽到'),
-          (snap.recentCards || []).length
-            ? h('div', { className: 'fh-cards', key: 'd' + drawSeq },
-              snap.recentCards.slice().reverse().map(c => h('div', {
-                key: c.id, className: 'fh-card-item', 'data-r': String(c.rarity),
-                style: { animationDelay: '0ms' },
-              },
-                h('div', { className: 'fh-card-star' }, '★'.repeat(c.rarity)),
-                h('b', null, c.name))))
-            : h('div', { className: 'fh-empty' }, '还没抽过。抽到的卡会进卡册，重复的也在。'))
         : null,
 
         // ── 星图 ──
@@ -1375,11 +1918,23 @@ window.__ModuleLoader__.load({
             }))) : null,
           h('div', { className: 'fh-sub', style: { lineHeight: 1.6, padding: '0 2px' } },
             '桌宠是独立程序（pet/ 目录），加载你本机解压的大肥鱼 Live2D 模型；先双击 pet/start.cmd 启动它，再点上方「一键开启桥接」（或到插件管理页本插件设置卡打开「Live2D 桌宠桥接」）。'
-            + '模型版权与署名见 README。面板里的像素小屋与精灵立绘不依赖桌宠，随时可用。'))
+            + '模型版权与署名见 README。面板里的像素小屋不依赖桌宠，随时可用。'))
         : null,
 
-        h('div', { className: 'fh-msg', role: 'status' }, msg),
       )
+      const loading = !snap ? h('div', { className: 'fh-msg' }, '正在读取小窝…') : null
+      const status = h('div', { className: 'fh-msg', role: 'status' }, msg)
+      return h('div', { className: 'fh-shell', ref: shellRef },
+        h('div', { className: 'fh-head' },
+          h('div', null,
+            h('div', { className: 'fh-title' }, h('span', null, '🐟'), '鱼鱼的小窝'),
+            h('div', { className: 'fh-sub' }, '她自己过日子 · 所有大肥鱼窗口共享 · 数据只在本机')),
+          onBack ? h('button', { className: 'fh-ghost', onClick: onBack }, '返回会话') : null),
+        h('div', { className: 'fh-tabs' }, tabs.map(([id, label]) =>
+          h('button', { key: id, className: 'fh-tab', 'data-active': tab === id ? 'true' : 'false',
+            onClick: () => setTab(id) }, label))),
+        h('div', { className: 'fh-body' },
+          h('div', { className: 'fh-view' }, loading, currentView, status)))
     }
 
     function FishHomeIcon({ size = 16 }) {

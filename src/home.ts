@@ -9,7 +9,7 @@
  *     所有窗口看到的「她正在做什么」完全一致，不需要后台计时器。
  *   - 幕与幕之间结算生活数值、写生活流（lifeLog），关掉 dsh 再打开照样补演。
  *   - 模型/用户也可以显式指定她去做一件事（`act`），这类行为带真实起止时间。
- *   - 数值、种田、抽卡、画画全部本地结算，零模型调用、零外部依赖。
+ *   - 数值、种田、画画全部本地结算，零模型调用、零外部依赖。
  *
  * wholesome 边界：洗澡只到「浴室里冲水、头发上全是泡泡」，不写任何露骨内容。
  */
@@ -36,20 +36,6 @@ export const RECIPES = [
   { id: 'coralRice',name: '珊瑚盖饭',   need: ['coral'],           fill: 24, mood: 6 },
   { id: 'pearlTea', name: '珍珠奶茶',   need: ['pearl'],           fill: 15, mood: 9 },
   { id: 'feast',    name: '海鲜大餐',   need: ['anemone','starfish'], fill: 38, mood: 12 },
-]
-
-export const POOLS = [
-  { id: 'sea',   name: '海边常驻', top: 5 },
-  { id: 'fish',  name: '鱼鱼表情', top: 6 },
-  { id: 'night', name: '星夜',     top: 6 },
-]
-
-const RARITY_POOL = [
-  { name: '海边的清晨', rarity: 3, weight: 50 },
-  { name: '摆尾巴的小肥鱼', rarity: 4, weight: 30 },
-  { name: '雨天的窗边', rarity: 5, weight: 15 },
-  { name: '抱抱时刻', rarity: 5, weight: 4 },
-  { name: '星海回响', rarity: 6, weight: 1 },
 ]
 
 /** 画作配色：前端按 seed 在这些色里做抽象构图。 */
@@ -129,9 +115,6 @@ export function blankHome(now = Date.now()) {
     coins: 120,
     garden: Array.from({ length: 9 }, () => null),
     bag: {},
-    cards: [],
-    drawCount: 0,
-    pity: 0,
     sleeping: false,
     sleepSince: 0,
     activity: null,
@@ -183,9 +166,6 @@ export function normalizeHome(raw, now = Date.now()) {
     coins: typeof raw.coins === 'number' && isFinite(raw.coins) ? Math.max(0, Math.floor(raw.coins)) : 120,
     garden,
     bag,
-    cards: Array.isArray(raw.cards) ? raw.cards.filter(c => c && typeof c.name === 'string').slice(-120) : [],
-    drawCount: typeof raw.drawCount === 'number' ? raw.drawCount : 0,
-    pity: typeof raw.pity === 'number' ? raw.pity : 0,
     sleeping: raw.sleeping === true,
     sleepSince: Number(raw.sleepSince) || 0,
     activity: normalizeActivity(raw.activity, now),
@@ -213,6 +193,7 @@ function normalizeActivity(raw, now) {
     by: ['self', 'user', 'model'].includes(raw.by) ? raw.by : 'self',
     note: typeof raw.note === 'string' ? raw.note.slice(0, 80) : '',
     slot: Number(raw.slot) || 0,
+    galleryAdded: raw.galleryAdded === true,
   }
 }
 
@@ -236,8 +217,7 @@ export function tickHome(home, now = Date.now()) {
       h.vitals.mood = clamp(h.vitals.mood + 8)
     }
   }
-  // 显式行为到点收尾（模型/用户指定的那些）。
-  if (h.activity && h.activity.by !== 'self' && now >= h.activity.endsAt) {
+  if (h.activity && now >= h.activity.endsAt) {
     finishActivity(h, h.activity.endsAt)
   }
   // 自动生活：按 40 分钟一幕补演，最多补 10 幕、最长回看 8 小时。
@@ -327,7 +307,7 @@ function finishActivity(h, at) {
   if (def) {
     applyFx(h, def.fx, a.by === 'self' ? 1 : 1)
     pushLog(h, `x${a.startedAt}`, at, `她${a.verb}${a.name === '睡觉' ? '' : '，' + a.line}`, a.id)
-    if (def.id === 'draw' || def.id === 'write') {
+    if ((def.id === 'draw' || def.id === 'write') && !a.galleryAdded) {
       const seed = (hashStr(`${h.seedKey}:${a.startedAt}`) % 100000) + 1
       h.gallery.push(makePainting(seed, a.note, a.startedAt, a.by))
       if (h.gallery.length > 30) h.gallery = h.gallery.slice(-30)
@@ -367,7 +347,7 @@ function dailyGuard(h, now, max = 40) {
 
 export function cropById(id) { return CROPS.find(c => c.id === id) }
 export function recipeById(id) { return RECIPES.find(r => r.id === id) }
-export function poolById(id) { return POOLS.find(p => p.id === id) }
+
 
 /** 统一的小窝操作入口：返回 { ok, home, message }。纯函数，不写库。 */
 export function homeAction(home, op, args = {}, now = Date.now()) {
@@ -405,8 +385,9 @@ export function homeAction(home, op, args = {}, now = Date.now()) {
       }
       if (def.id === 'draw') {
         const seed = (hashStr(`${h.seedKey}:${now}`) % 100000) + 1
-        const painting = makePainting(seed, line, now, 'model', args.palette)
+        const painting = makePainting(seed, line, now, h.activity.by, args.palette)
         h.gallery.push(painting)
+        h.activity.galleryAdded = true
         if (h.gallery.length > 30) h.gallery = h.gallery.slice(-30)
         return done(`${line}。画好了《${painting.title}》，挂在了画架上。`)
       }
@@ -542,33 +523,6 @@ export function homeAction(home, op, args = {}, now = Date.now()) {
       return done(`做好了${recipe.name}，饱腹 +${recipe.fill}，心情 +${recipe.mood}。`)
     }
 
-    case 'draw': {
-      const pool = poolById(args.pool ?? 'sea')
-      const n = args.ten === true ? 10 : 1
-      const cost = n * 10
-      if (!pool) return fail('没有这个卡池。')
-      if (h.coins < cost) return fail(`金币不够，${n} 连需要 ${cost}。`)
-      if (!dailyGuard(h, now, 30)) return fail('今天抽得太多了，明天再来吧。')
-      h.coins -= cost
-      const got = []
-      for (let i = 0; i < n; i++) {
-        h.pity += 1
-        let rarity = 3
-        let roll = Math.random() * 100
-        let acc = 0
-        for (const c of RARITY_POOL) { acc += c.weight; if (roll <= acc) { rarity = c.rarity; break } }
-        if (h.pity >= 20) { rarity = Math.max(rarity, 5); h.pity = 0 }
-        const poolCard = rarity >= pool.top
-          ? { name: `${pool.name} · ${RARITY_POOL[RARITY_POOL.length - 1].name}`, rarity: pool.top }
-          : RARITY_POOL.find(c => c.rarity === rarity) ?? RARITY_POOL[0]
-        h.cards.push({ id: `${now}-${i}-${Math.random().toString(36).slice(2, 7)}`,
-          name: poolCard.name, rarity: poolCard.rarity, at: now, pool: pool.id })
-        got.push(`${'★'.repeat(poolCard.rarity)} ${poolCard.name}`)
-      }
-      h.drawCount += n
-      return done(`抽了 ${n} 次：\n${got.join('\n')}`)
-    }
-
     case 'pet': {
       if (!dailyGuard(h, now, 30)) return fail('今天摸得够多啦。')
       h.vitals.mood = clamp(h.vitals.mood + 4)
@@ -625,7 +579,7 @@ export function homeAction(home, op, args = {}, now = Date.now()) {
   }
 }
 
-/** 给面板用的紧凑快照（不含全部卡册，控制体积）。 */
+/** 给面板用的紧凑快照，控制体积。 */
 export function homeSnapshot(home, now = Date.now()) {
   const h = tickHome(home, now)
   const r = (n) => Math.round(Number(n) || 0)
@@ -641,9 +595,6 @@ export function homeSnapshot(home, now = Date.now()) {
       remainMs: Math.max(0, c.readyAt - now),
     } : null),
     bag: h.bag,
-    cardCount: h.cards.length,
-    recentCards: h.cards.slice(-8),
-    drawCount: h.drawCount,
     sleeping: h.sleeping,
     readyCount: ready.length,
     activity: h.activity ? {

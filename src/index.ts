@@ -26,7 +26,7 @@ import { readFile, writeFile, mkdir } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { dirname, join, extname, basename } from 'node:path'
 import { blankHome, normalizeHome, tickHome, homeAction, homeSnapshot,
-  cropById, recipeById, POOLS, CROPS, RECIPES, ACTIVITIES, PALETTES } from './home'
+  cropById, recipeById, CROPS, RECIPES, ACTIVITIES, PALETTES } from './home'
 import { normalizeMode, appendStream, searchStream, traceStream, blankTiers, normalizeTiers,
   distillTier, archiveTier, buildStarmap, layoutStarmap, MODE_LABELS } from './memory-modes'
 import { readPetApi, petUnavailableError, callPet, petText, isRichPet } from './pet-bridge'
@@ -172,7 +172,7 @@ const bondSchema = z.object({
   // 有独立上限，防止模型失控把好感度拉满。
   selfAssessDayKey: z.string().optional(),
   selfAssessDayGain: z.number().min(0).optional(),
-  // v0.18.0 鱼鱼小窝：本地生活数值/种田/抽卡，所有大肥鱼窗口共享同一个 home。
+  // v0.18.0 鱼鱼小窝：本地生活数值/种田，所有大肥鱼窗口共享同一个 home。
   home: z.record(z.string(), z.any()).optional(),
   // v0.18.0 记忆三档：summary(摘要) / stream(原话流) / tiered(分层)。
   memoryMode: z.enum(['summary', 'stream', 'tiered']).optional(),
@@ -2293,7 +2293,7 @@ export function apply(ctx, config = {}) {
           try {
             const snap = await companion.snapshotHome('')
             reply(200, { ok: true, enabled: true, ...snap, mode: runtimeOpts.memoryMode,
-              crops: CROPS, recipes: RECIPES, pools: POOLS })
+              crops: CROPS, recipes: RECIPES })
           } catch (err) { reply(500, { ok: false, error: String(err) }) }
           return
         }
@@ -2505,7 +2505,7 @@ export function apply(ctx, config = {}) {
     },
   }), companionOnly)
 
-  // v0.18.0 鱼鱼小窝：让模型也能照看小窝（种田/抽卡/做饭/摸摸），与面板共用状态。
+  // v0.18.0 鱼鱼小窝：让模型也能照看小窝（种田/做饭/摸摸），与面板共用状态。
   // v0.19.0：加 act / paint / autonomy / weather——她自己会过日子，模型也能
   // 让她做一件具体的事（"去画张画""去洗澡"），或干脆不打扰她。
   if (cfg.homeEnabled !== false) {
@@ -2513,7 +2513,7 @@ export function apply(ctx, config = {}) {
       name: 'companion_home',
       description: '照看大肥鱼的鱼鱼小窝：她自己在屋里过日子（做饭/洗澡/看书/画画/种菜/看星星…），你也能安排她做一件事。用 op=status 看她此刻在做什么、生活流、金币与菜畦；op=act 让她去做某事（activity 见 status 返回的列表）；op=paint 让她画一张画挂进画册；op=autonomy 开关她的自主生活。所有窗口共享同一个小窝。',
       parameters: {
-        op: { type: 'string', description: '操作：status / act / paint / autonomy / buy / plant / water / harvest / replant / sell / cook / draw / pet / talk / sleep / wake / clean / weather / gallery' },
+        op: { type: 'string', description: '操作：status / act / paint / autonomy / buy / plant / water / harvest / replant / sell / cook / pet / talk / sleep / wake / clean / weather / gallery' },
         activity: { type: 'string', description: 'act 用：要她做的事（cook/eat/bath/read/draw/garden/harvest/stargaze/window/music/sofa/tidy/swim/nap/write/tea/sleep）' },
         note: { type: 'string', description: 'act 用：可选的此刻心情/动作描述（≤60 字），会显示在她头顶的气泡里' },
         title: { type: 'string', description: 'paint 用：这幅画的名字（不给就自己起）' },
@@ -2524,8 +2524,6 @@ export function apply(ctx, config = {}) {
         slot: { type: 'number', description: '菜畦编号 0-8（plant/water/harvest 用）' },
         n: { type: 'number', description: '数量（buy/sell 用）' },
         recipe: { type: 'string', description: '菜谱 id（cook 用）' },
-        pool: { type: 'string', description: '卡池 id：sea/fish/night（draw 用）' },
-        ten: { type: 'boolean', description: 'draw 是否十连' },
         text: { type: 'string', description: '跟它说话的内容（talk 用）' },
       },
       output: textOutput,
@@ -2544,14 +2542,13 @@ export function apply(ctx, config = {}) {
             a ? `她此刻：${a.verb}（${a.line}），已进行 ${Math.round(a.elapsedMs / 60000)} 分钟` : '她此刻：待着',
             `心情 ${snap.vitals.mood} · 精神 ${snap.vitals.spirit} · 饱腹 ${snap.vitals.fullness}`,
             `清爽 ${snap.vitals.cleanliness} · 陪伴 ${snap.vitals.companionship} · 好奇 ${snap.vitals.curiosity}`,
-            `金币 ${snap.coins} · 已成熟 ${snap.readyCount} 块地 · 卡册 ${snap.cardCount} 张 · 画册 ${snap.galleryCount} 张`,
+            `金币 ${snap.coins} · 已成熟 ${snap.readyCount} 块地 · 画册 ${snap.galleryCount} 张`,
             `背包：${Object.keys(snap.bag).length ? Object.entries(snap.bag).map(([k, v]) => `${cropById(k)?.name ?? k}×${v}`).join('、') : '（空）'}`,
             snap.sleeping ? '她睡着了。' : '',
             log.length ? `最近的生活：\n${log.join('\n')}` : '',
             '能做：' + ACTIVITIES.filter(x => x.id !== 'sleep').map(x => `${x.id}=${x.name}`).join('、'),
             '作物：' + CROPS.map(c => `${c.id}=${c.name}(${c.tier},种${c.seed}/卖${c.sell})`).join('；'),
             '菜谱：' + RECIPES.map(r => `${r.id}=${r.name}`).join('；'),
-            '卡池：' + POOLS.map(p => `${p.id}=${p.name}`).join('；'),
             '画作配色：' + Object.keys(PALETTES).map(k => `${k}=${PALETTES[k].name}`).join('、'),
           ].filter(Boolean).join('\n') }
         }
@@ -2932,9 +2929,9 @@ export function apply(ctx, config = {}) {
             snap.activity ? `她此刻：${snap.activity.verb}（${snap.activity.line}）` : '她此刻：待着',
             `心情 ${snap.vitals.mood} · 精神 ${snap.vitals.spirit} · 饱腹 ${snap.vitals.fullness}`,
             `清爽 ${snap.vitals.cleanliness} · 陪伴 ${snap.vitals.companionship} · 好奇 ${snap.vitals.curiosity}`,
-            `金币 ${snap.coins} · 卡册 ${snap.cardCount} 张 · 画册 ${snap.galleryCount} 张 · 成熟 ${snap.readyCount} 块地`,
+            `金币 ${snap.coins} · 画册 ${snap.galleryCount} 张 · 成熟 ${snap.readyCount} 块地`,
             result.ok ? '' : result.message,
-            '用法：/fish home status|act activity=draw|paint title=海边的下午 palette=sea|autonomy on=true|weather weather=rain|buy crop=kelp n=2|plant crop=kelp slot=0|water slot=0|harvest slot=0|sell crop=kelp n=1|cook recipe=clamSoup|draw pool=sea ten=true|pet|sleep|wake',
+            '用法：/fish home status|act activity=draw|paint title=海边的下午 palette=sea|autonomy on=true|weather weather=rain|buy crop=kelp n=2|plant crop=kelp slot=0|water slot=0|harvest slot=0|sell crop=kelp n=1|cook recipe=clamSoup|pet|sleep|wake',
           ].filter(Boolean).join('\n'))
         }
         return ok(result.message)
