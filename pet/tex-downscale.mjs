@@ -7,7 +7,8 @@
  * 生成缓存供 runtime manifest 引用；原始模型目录只读，绝不改写。
  *
  * 实现：zlib inflate PNG IDAT → 逐行 unfilter（滚动两行，内存 O(width)）
- *       → 按整数比例采样 → 重新编码 PNG（filter 0）。仅支持 8bit RGB/RGBA，
+ *       → 按整数比例做区域平均（RGBA 预乘 alpha，避免透明边缘黑边）
+ *       → 重新编码 PNG（filter 0）。仅支持 8bit RGB/RGBA，
  *       不满足时返回 null，调用方回退原图（不会更差）。
  */
 import { inflateSync, deflateSync } from 'node:zlib'
@@ -78,6 +79,10 @@ export async function downscalePng(src, dst, maxSize) {
   const scale = Math.ceil(Math.max(width, height) / maxSize)
   const nw = Math.ceil(width / scale), nh = Math.ceil(height / scale)
   const outRows = []
+  // 区域平均累加器。RGBA 先按 alpha 预乘再累加，输出时除回 alpha，
+  // 否则透明像素的 RGB 会把发丝/五官边缘染黑，看起来像图层错位。
+  const colorAcc = new Float64Array(nw * (bpp + 1))
+  const alphaAcc = bpp === 4 ? new Float64Array(nw) : null
   let prev = Buffer.alloc(stride), cur = Buffer.alloc(stride), p = 0
   for (let y = 0; y < height; y++) {
     const ft = raw[p++]
@@ -99,12 +104,53 @@ export async function downscalePng(src, dst, maxSize) {
       cur[x] = v & 0xff
     }
     p += stride
-    if (y % scale === 0) {
+
+    const rowInBlock = y % scale
+    for (let x = 0; x < nw; x++) {
+      const cols = Math.min(scale, width - x * scale)
+      const base = x * (bpp + 1)
+      for (let sx = 0; sx < cols; sx++) {
+        const si = (x * scale + sx) * bpp
+        if (bpp === 4) {
+          const al = cur[si + 3]
+          alphaAcc[x] += al
+          colorAcc[base] += cur[si] * al
+          colorAcc[base + 1] += cur[si + 1] * al
+          colorAcc[base + 2] += cur[si + 2] * al
+        } else {
+          colorAcc[base] += cur[si]
+          colorAcc[base + 1] += cur[si + 1]
+          colorAcc[base + 2] += cur[si + 2]
+        }
+      }
+    }
+    if (rowInBlock === scale - 1 || y === height - 1) {
+      const rows = Math.min(scale, height - (y - rowInBlock))
       const row = Buffer.alloc(nw * bpp + 1)
       row[0] = 0
       for (let x = 0; x < nw; x++) {
-        const sx = Math.min(width - 1, x * scale) * bpp
-        cur.copy(row, 1 + x * bpp, sx, sx + bpp)
+        const cols = Math.min(scale, width - x * scale)
+        const denom = rows * cols
+        const base = x * (bpp + 1)
+        const off = 1 + x * bpp
+        if (bpp === 4) {
+          const aSum = alphaAcc[x]
+          const al = Math.round(aSum / denom)
+          row[off + 3] = al
+          if (aSum > 0) {
+            // color 与 alpha 都是 0..255，预乘和再除以 alpha 和已经是 0..255，
+            // 不能再乘 255，否则会溢出到低字节，渲染成彩色噪声。
+            row[off] = Math.round(colorAcc[base] / aSum)
+            row[off + 1] = Math.round(colorAcc[base + 1] / aSum)
+            row[off + 2] = Math.round(colorAcc[base + 2] / aSum)
+          }
+          alphaAcc[x] = 0
+        } else {
+          row[off] = Math.round(colorAcc[base] / denom)
+          row[off + 1] = Math.round(colorAcc[base + 1] / denom)
+          row[off + 2] = Math.round(colorAcc[base + 2] / denom)
+        }
+        colorAcc[base] = colorAcc[base + 1] = colorAcc[base + 2] = 0
       }
       outRows.push(row)
     }

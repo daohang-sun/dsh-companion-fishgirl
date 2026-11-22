@@ -3625,7 +3625,7 @@ ${log.join("\n")}` : "",
     };
     ctx.tools.register(defineTool({
       name: "companion_pet",
-      description: "操作你的 Live2D 桌宠（桌面上的大肥鱼形象）：让它做出表情、动作、说话，或收起/显示。op=presence 可下发一份「临场意图」（表情+动作+短气泡同时作用于桌宠和面板里的像素小屋/院子，让两种形象表现同一状态）；op=list 先看可用的表情与动作名；op=status 查当前状态。表情/动作用中文名（如 脸红/爱心眼/黑脸、IDLE/默认手切举手）。仅大肥鱼模式可用。",
+      description: "操作你的 Live2D 桌宠（桌面上的大肥鱼形象）：让它做出表情、动作、说话，或收起/显示。op=presence 可下发一份「临场意图」（表情+动作+短气泡同时作用于桌宠和面板里的像素小屋/院子，让两种形象表现同一状态）；op=list 先看可用的表情与动作名；op=status 查当前状态。表情/动作用中文名（如 脸红/爱心眼/流泪、IDLE/默认手切举手）。仅大肥鱼模式可用。",
       parameters: {
         op: { type: "string", description: "操作：list|status|say|presence|expression|motion|show|hide|focus" },
         text: { type: "string", description: "say / presence 时她说的话（短气泡）" },

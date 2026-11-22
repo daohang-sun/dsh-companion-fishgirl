@@ -171,7 +171,10 @@ export function createPetServer(opts = {}) {
   // 缓存写在插件的 pet/.texcache/ 下，按模型目录 hash 分目录；不碰用户原始模型。
   const maxTextureSize = Number(opts.maxTextureSize) || 0 // 0/default 时下方决定默认值
   const texCacheRoot = resolve(opts.texCacheDir || join(__dirname, '.texcache'))
-  const cacheKey = createHash('sha1').update(modelDir).digest('hex').slice(0, 12)
+  // v3：降采样从「最近邻取点」改成「区域平均 + 预乘 alpha」。换算法必须换缓存键，
+  // 否则旧缓存虽然尺寸合格，却仍带着锯齿/透明边缘发黑的问题。
+  const TEX_CACHE_VERSION = 3
+  const cacheKey = createHash('sha1').update(`tex-v${TEX_CACHE_VERSION}|${modelDir}`).digest('hex').slice(0, 12)
   const texCacheDir = join(texCacheRoot, cacheKey)
   const texMap = new Map()          // 原始相对路径 → /texcache/<key>/<file>
   const texInfo = { enabled: false, maxSize: 0, scaled: [], skipped: [], error: '' }

@@ -22,7 +22,7 @@
 - `server.mjs` 纯 Node 零依赖本机服务：静态托管模型文件、生成增强版 `runtime.model3.json`（补上原始 VTube Studio 模型缺失的 Expressions/Motions，23 表情 + 8 动作才播得出来）、命令/事件队列、`/say` `/call` 兼容。只监听 127.0.0.1，Bearer token 校验。
 - `launch.mjs` 离线启动器：启动本机服务 + 探测系统 Chrome/Edge，用 `--app`（独立 user-data-dir、无标签栏）打开桌宠窗口；窗口关闭自动停服务。零依赖、离线可用，是 `start.cmd` 的默认路径。
 - `main.js` Electron 主进程（可选）：透明置顶窗口 + 拖动 IPC + 托盘；`renderer.js` 用 pixi-live2d-display(cubism4) 真正渲染 `.moc3`，处理点击命中区、拖拽、表情/动作/说话气泡。
-- `vendor/` 已内置 pixi.js 6、Cubism Core、pixi-live2d-display cubism4，无需联网加载运行库。
+- `vendor/` 已内置 PixiJS 7.4.3、Cubism Core 5.x、pixi-live2d-display 0.5.0-beta / Cubism Web R7，无需联网加载运行库。
 - `api.json` 由桌宠写入、由 dsh 插件读取；token 只在两个本机进程间使用，不下发浏览器。
 
 ## 合规

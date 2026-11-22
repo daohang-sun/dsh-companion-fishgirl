@@ -109,13 +109,18 @@
   // 启动时把全部 exp3 预载进 expressionCache，切表情不再重复请求网络。
   //
   // 关键修复（脸部异常/深红脸颊+畸形嘴块的真正原因）：
-  // 之前切换表情只替换 activeExp，旧表情写入的 key 参数没有被归零/复位。
-  // 这些 key 参数是模型自定义参数，idle 动作不会覆盖，于是多个表情的参数
-  // 会叠加残留（脸红 key7=1 + 爱心眼 key4=1 + …），越切脸越奇形怪状。
-  // 现在：切换/清除前先把已应用参数恢复到模型默认值，再淡入新表情。
+  // 1) 之前切换表情只替换 activeExp，旧表情写入的 key 参数没有被归零/复位。
+  //    这些 key 参数是模型自定义参数，idle 动作不会覆盖，于是多个表情的参数
+  //    会叠加残留（脸红 key7=1 + 爱心眼 key4=1 + …），越切脸越奇形怪状。
+  //    现在：切换/清除前先把已应用参数恢复到模型默认值。
+  // 2) exp3 的 Value 是「目标值」，不是相对默认值的变化量。连续参数从默认值
+  //    淡入到目标值；key*/Clothes*/Movement* 是离散开关（0/1），必须直接写入。
+  //    若对开关做 450ms 插值，会经过 0<x<1 的半切换态：嘴已经变成灰色张口、
+  //    眼睛却还没切换，看起来就是脸部图层错位。
   const expressionCache = new Map()
   let activeExp = null
   let appliedDefault = new Map()   // id -> 该参数的模型默认值（用于切表情时复位）
+  const DISCRETE_PARAM = /^(key\d+|Clothes\d+|Movement\d+)$/i
 
   function expParams(exp) {
     return Array.isArray(exp && exp.Parameters)
@@ -206,13 +211,15 @@
     const core = model.internalModel && model.internalModel.coreModel
     if (!core || typeof core.setParameterValueById !== 'function') return
     const fade = Math.min(1, (performance.now() - activeExp.startedAt) / 450)
-    // 每帧从「默认值」向「默认值 + exp3 目标值」线性过渡，淡入平滑且不残留。
     for (const p of activeExp.params) {
       const def = appliedDefault.has(p.id) ? appliedDefault.get(p.id) : 0
+      const target = Number(p.value) || 0   // exp3 Value 是绝对目标值
+      // 离散开关直接写入，禁止中间态；连续参数才做 450ms 淡入。
+      const value = DISCRETE_PARAM.test(p.id) ? target : def + (target - def) * fade
       try {
-        core.setParameterValueById(p.id, def + p.value * fade)
+        core.setParameterValueById(p.id, value)
         if (window.__fishPet._probeActive) {
-          window.__fishPet._probeValues[p.id] = core.getParameterValueById(p.id)
+          window.__fishPet._probeValues[p.id] = value
         }
       } catch {}
     }
@@ -402,11 +409,16 @@
           for (let i = 0; i < 50 && expressionCache.size < (catalog.expression || []).length; i++) await wait(100)
           window.__fishPet._probeActive = true
           const steps = []
-          for (const name of ['脸红', '爱心眼', '']) {
+          // 加入「黑脸」：它的 key1 是离散开关，若被淡入会经过半切换态，
+          // 表现为眼睛还没变黑但嘴已变成灰色张口（用户截图里的脸部错位）。
+          for (const name of ['脸红', '爱心眼', '黑脸', '']) {
             window.__fishPet._probeValues = {}
             applyExpression(name)
+            await wait(70)
+            const early = { ...window.__fishPet._probeValues }
+            window.__fishPet._probeValues = {}
             await wait(600)
-            steps.push({ expr: name || '(清除)', values: { ...window.__fishPet._probeValues } })
+            steps.push({ expr: name || '(清除)', early, values: { ...window.__fishPet._probeValues } })
             try { void fetch(API + '/api/selftest', { method: 'POST', headers: H(TOKEN),
               body: JSON.stringify({ steps: [...steps] }) }) } catch {}
           }

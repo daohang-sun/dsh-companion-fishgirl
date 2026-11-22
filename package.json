@@ -1,6 +1,6 @@
 {
   "name": "dsh-companion-fishgirl",
-  "version": "0.22.2",
+  "version": "0.22.3",
   "private": true,
   "type": "module",
   "description": "DeepSeek Harness 陪伴养成插件：美少女大肥鱼养成面板、跨窗口经历记忆与隐私清理。",
@@ -51,6 +51,7 @@
     "pet/renderer.js",
     "pet/server.mjs",
     "pet/server-only.mjs",
+    "pet/tex-downscale.mjs",
     "pet/launch.mjs",
     "pet/launch-electron.mjs",
     "pet/package.json",
