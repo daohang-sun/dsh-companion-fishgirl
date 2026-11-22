@@ -17,9 +17,10 @@ import { createServer } from 'node:http'
 import { readFile, writeFile, readdir, stat } from 'node:fs/promises'
 import { existsSync } from 'node:fs'
 import { join, resolve, extname, basename, sep } from 'node:path'
-import { randomBytes } from 'node:crypto'
+import { randomBytes, createHash } from 'node:crypto'
 import { dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { downscalePng, pngSize } from './tex-downscale.mjs'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
 
@@ -86,7 +87,7 @@ async function jsonFiles(dir) {
  * 原始文件里 FileReferences 没有这两个字段（VTube Studio 直接从目录读），
  * Cubism Web SDK 必须显式声明才能 setExpression() / motion()。
  */
-export async function buildRuntimeManifest(modelDir, basePath = '/model/') {
+export async function buildRuntimeManifest(modelDir, basePath = '/model/', textureMapper = null) {
   const src = resolve(modelDir, '大肥鱼.model3.json')
   let raw
   try { raw = JSON.parse(await readFile(src, 'utf8')) }
@@ -109,7 +110,16 @@ export async function buildRuntimeManifest(modelDir, basePath = '/model/') {
 
   // 相对引用改成静态服务 URL
   if (typeof fr.Moc === 'string') fr.Moc = url('', fr.Moc)
-  if (Array.isArray(fr.Textures)) fr.Textures = fr.Textures.map(t => url('', t))
+  // 贴图降采样：若注入了 mapper（服务端缓存了 <=2048 的版本），优先用缓存 URL，
+  // 解决真机 WebGL MAX_TEXTURE_SIZE 上限导致 4096/8192 贴图上传失败的脸部异常。
+  // mapper 返回 null 时回退原图，绝不改写用户模型目录。
+  if (Array.isArray(fr.Textures)) fr.Textures = fr.Textures.map(t => {
+    if (textureMapper) {
+      const mapped = textureMapper(t)
+      if (mapped) return mapped
+    }
+    return url('', t)
+  })
   if (typeof fr.Physics === 'string') fr.Physics = url('', fr.Physics)
   if (typeof fr.DisplayInfo === 'string') fr.DisplayInfo = url('', fr.DisplayInfo)
 
@@ -156,6 +166,52 @@ export function createPetServer(opts = {}) {
   let catalog = { expression: [], motion: [] }
   let manifest = null
   let server = null
+
+  // —— 贴图降采样缓存（B 站讨论：4096/8192 贴图在网页渲染要降到 2048）——
+  // 缓存写在插件的 pet/.texcache/ 下，按模型目录 hash 分目录；不碰用户原始模型。
+  const maxTextureSize = Number(opts.maxTextureSize) || 0 // 0/default 时下方决定默认值
+  const texCacheRoot = resolve(opts.texCacheDir || join(__dirname, '.texcache'))
+  const cacheKey = createHash('sha1').update(modelDir).digest('hex').slice(0, 12)
+  const texCacheDir = join(texCacheRoot, cacheKey)
+  const texMap = new Map()          // 原始相对路径 → /texcache/<key>/<file>
+  const texInfo = { enabled: false, maxSize: 0, scaled: [], skipped: [], error: '' }
+
+  async function prepareTextures() {
+    const limit = maxTextureSize > 0 ? maxTextureSize : 2048
+    texInfo.maxSize = limit
+    try {
+      const raw = JSON.parse(await readFile(resolve(modelDir, '大肥鱼.model3.json'), 'utf8'))
+      const textures = (raw.FileReferences && raw.FileReferences.Textures) || []
+      for (const rel of textures) {
+        const src = safeBase(modelDir, rel)
+        if (!src || !existsSync(src)) continue
+        const info = await pngSize(src)
+        if (!info) continue
+        // 已在限制内：直接跳过，继续用原图 URL
+        if (Math.max(info.width, info.height) <= limit) { texInfo.skipped.push(rel); continue }
+        const targetName = basename(rel)      // texture_00.png
+        const dst = join(texCacheDir, targetName)
+        // 缓存命中：校验尺寸确实 <=limit，避免旧缓存失效
+        let ok = false
+        try {
+          const cached = await pngSize(dst)
+          ok = !!(cached && Math.max(cached.width, cached.height) <= limit)
+        } catch {}
+        if (!ok) {
+          const r = await downscalePng(src, dst, limit)
+          if (!r) { texInfo.skipped.push(rel); continue }
+        }
+        const cached = await pngSize(dst)
+        texMap.set(rel, '/texcache/' + cacheKey + '/' + encodeURIComponent(targetName))
+        texInfo.scaled.push({ rel, from: info.width + 'x' + info.height, to: cached.width + 'x' + cached.height })
+      }
+      texInfo.enabled = texMap.size > 0
+    } catch (err) {
+      texInfo.error = String(err && err.message || err)
+    }
+  }
+  const textureMapper = (rel) => texMap.get(decodeURIComponent(rel)) || null
+  const buildManifest = () => buildRuntimeManifest(modelDir, '/model/', textureMapper)
 
   const send = (res, code, obj, type = 'application/json; charset=utf-8') => {
     res.writeHead(code, {
@@ -204,7 +260,8 @@ export function createPetServer(opts = {}) {
 
     if (path === '/api/health' && req.method === 'GET') {
       return send(res, 200, { ok: true, model: state.model, ready: !!manifest,
-        expressions: catalog.expression.length, motions: catalog.motion.length })
+        expressions: catalog.expression.length, motions: catalog.motion.length,
+        textures: texInfo })
     }
     if (path === '/api/state' && req.method === 'GET') {
       return send(res, 200, { ok: true, ...state, catalog })
@@ -212,6 +269,11 @@ export function createPetServer(opts = {}) {
     if (path === '/api/commands' && req.method === 'GET') {
       const after = Number(url.searchParams.get('after') || 0) || 0
       return send(res, 200, { ok: true, commands: commands.filter(c => c.seq > after) })
+    }
+    if (path === '/api/selftest' && req.method === 'POST') {
+      const body = await readBody(req)
+      await writeFile(join(__dirname, 'selftest-result.json'), JSON.stringify(body, null, 2))
+      return send(res, 200, { ok: true })
     }
     if (path === '/api/capture' && req.method === 'POST') {
       const body = await readBody(req)
@@ -295,7 +357,7 @@ export function createPetServer(opts = {}) {
       return send(res, 200, { ok: true, ...cmd })
     }
     if (path === '/api/reload' && req.method === 'POST') {
-      manifest = await buildRuntimeManifest(modelDir)
+      manifest = await buildManifest()
       catalog = {
         expression: (manifest?.FileReferences?.Expressions || []).map(e => ({ name: e.Name, file: e.File })),
         motion: Object.entries(manifest?.FileReferences?.Motions || {}).flatMap(([group, list]) =>
@@ -351,12 +413,13 @@ export function createPetServer(opts = {}) {
     try { rel = decodeURIComponent(rel) } catch {}
     let file
     if (rel === '/runtime.model3.json') {
-      if (!manifest) manifest = await buildRuntimeManifest(modelDir)
+      if (!manifest) manifest = await buildManifest()
       return send(res, 200, manifest)
     }
     if (rel === '/' || rel === '/index.html') file = resolve(opts.webDir || '.', 'index.html')
     else if (rel.startsWith('/vendor/')) file = safeBase(resolve(opts.webDir || '.', 'vendor'), rel.slice('/vendor/'.length))
     else if (rel.startsWith('/model/')) file = safeBase(modelDir, rel.slice('/model/'.length))
+    else if (rel.startsWith('/texcache/')) file = safeBase(texCacheRoot, rel.slice('/texcache/'.length))
     else if (rel === '/renderer.js') file = resolve(opts.webDir || '.', 'renderer.js')
     else if (rel === '/preload.js') file = resolve(opts.webDir || '.', 'preload.js')
     else return send(res, 404, { error: 'not found' })
@@ -396,7 +459,9 @@ export function createPetServer(opts = {}) {
         server.once('error', fail)
         server.listen(port, '127.0.0.1', ok)
       })
-      manifest = await buildRuntimeManifest(modelDir)
+      // 生成 <=2048 贴图缓存（失败不影响原图回退；只在启动时做一次）
+      await prepareTextures()
+      manifest = await buildManifest()
       catalog = {
         expression: (manifest?.FileReferences?.Expressions || []).map(e => ({ name: e.Name, file: e.File })),
         motion: Object.entries(manifest?.FileReferences?.Motions || {}).flatMap(([group, list]) =>

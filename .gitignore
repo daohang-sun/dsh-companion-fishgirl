@@ -14,6 +14,10 @@ pet/capture.jpg
 pet/capture-face.png
 pet/final-face.png
 pet/capture-probe.json
+pet/selftest-result.json
+
+# 贴图降采样缓存（运行时从用户本机模型派生，绝不可入库/再分发）
+pet/.texcache/
 
 # 编辑器与系统文件
 .vscode/

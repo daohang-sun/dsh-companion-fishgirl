@@ -1,3 +1,12 @@
+## v0.22.2 · 贴图降采样到 2048 + 表情残留修复 · 2026-11-22
+
+- **贴图降采样（对应 B 站讨论「贴图 4096 网页渲染先降到 2048」）**：真机 WebGL 的 `MAX_TEXTURE_SIZE` 常为 4096/8192，大肥鱼的 `大肥鱼.4096/` 贴图最大到 **8192×8192**（单张理论显存 256MB），超限会上传失败，表现为脸部/贴图异常。新增纯 Node 零依赖模块 `pet/tex-downscale.mjs`（zlib inflate PNG → 逐行 unfilter 滚动两行 → 整数比例采样 → 重编码 PNG，仅支持 8bit RGB/RGBA，否则回退原图）。`pet/server.mjs` 启动时把超限贴图缩到 ≤2048 存到 `pet/.texcache/<模型hash>/`（按模型目录 hash 隔离，缓存复用），`runtime.model3.json` 的贴图 URL 优先指向缓存，并新增 `/texcache/` 静态路由。**绝不改写用户原模型目录、绝不打包/再分发贴图**。验证：4 张贴图（8192²/4096×8192/4096²）成功降到 ≤2048、缓存仅 3.2MB、PIL 校验 PNG 合法、真实 Chrome 加载 `model_ready`（7 修复层/23 表情）正常。`opts.maxTextureSize` 可调，贴图已在限制内则跳过。
+- **修复：表情参数叠加残留（脸部越切越怪/深红脸颊+畸形嘴块）**：此前 `applyExpression` 切换表情只替换 `activeExp`，旧表情写入的 `key1..key13` 自定义参数没有复位；这些参数 idle 动作不会覆盖，于是多个表情叠加残留（脸红 key7=1 + 爱心眼 key4=1 + …）。现在写入前用 `getParameterIndex`/`getParameterDefaultValue` 记录各参数模型默认值，切换/清除时先 `clearAppliedExpression()` 复位旧参数，再从默认值淡入新表情。`?selftest=expressions` + `/api/selftest` 回归：脸红写入 key7=1、爱心眼写入 key4=1 且 key7 不再残留、清除后无写入，全通过。
+- 可诊断性：`window.__fishPet` 增加 `glMaxTextureSize`/`textureUrls`/`activeExpression`/`paramSnapshot` 探针；`/api/health` 返回贴图降采样状态（`textures.scaled`/`skipped`）。
+- `.gitignore` 增加 `pet/.texcache/` 与 `pet/selftest-result.json`（运行时派生，禁止入库）。
+
+---
+
 ## v0.22.1 · Live2D 运行库升级 + 鼻部黑块修复 + 共享临场意图 · 2026-11-22
 
 - **运行库升级**：`pet/vendor/pixi.min.js` 升到 PixiJS 7.4.3，`pet/vendor/cubism4.min.js` 升到 pixi-live2d-display 0.5.0-beta（内置 Cubism Web R7），Cubism Core 5.x 保留。`pet/index.html` 在加载 cubism4 前加 `process.env.NODE_ENV` 垫片，解决 0.5.0-beta UMD 在 Electron 关闭 Node 集成后因无 `process` 而加载失败。加载顺序保持 pixi → core → 垫片 → cubism4 → renderer。

@@ -6,7 +6,7 @@
 
 让 DeepSeek 在对话之外多一层**长期陪伴关系**：会记住你的偏好与重要往事，也会记得**在别的窗口里你送过什么、聊过什么**；随情感交流慢慢成长、有自己的心情与关系阶段，并把这些状态跨会话延续下去。所有数据留在本地、按用户隔离、可随时删除或导出。
 
-- 当前版本：**v0.22.1**
+- 当前版本：**v0.22.2**
 - 运行产物：`dist/companion.js`（唯一宿主入口）+ `client.js`（子菜单、配置卡、鱼鱼小窝面板）+ `pet/`（独立 Live2D 桌宠程序）+ `assets/cabin/`（CC BY 4.0 房间素材）
 - 适用：`deepseek-ai/deepseek-harness`（dsh，Cordis 4 / 桌面端与 web profile）
 
@@ -321,8 +321,10 @@ npm install --no-save "file:<插件目录>"
 
 ### 它能做什么
 
-- **真正加载模型**：`大肥鱼.model3.json` + `.moc3` + 5 张 4K 贴图 + `physics3.json`；用 pixi-live2d-display(Cubism 4) 在 Electron 透明置顶窗口里渲染（v0.22.1 起运行库升级为 **PixiJS 7.4.3 + pixi-live2d-display 0.5.0-beta / Cubism Web R7**，Cubism Core 5.x）。原始 `model3.json` 是 VTube Studio 导出的、**没有 Expressions/Motions 字段**——桌宠服务会自动扫描 `Exp3/` 与 `Animation/` 生成增强版 manifest，于是 **23 个表情**（脸红/爱心眼/圈圈眼/黑脸/流泪/兔牙/单片眼镜…）与 **8 个动作**（IDLE/举手/狗尾草/竖手指/脱捕…）都能播放，物理摆动照常。
+- **真正加载模型**：`大肥鱼.model3.json` + `.moc3`（**moc3 v5 / Cubism 5**）+ 5 张 4K 贴图 + `physics3.json`；用 pixi-live2d-display 在 Electron 透明置顶窗口里渲染（v0.22.1 起运行库升级为 **PixiJS 7.4.3 + pixi-live2d-display 0.5.0-beta / Cubism Web R7**，Cubism Core 5.x 与 moc3 v5 匹配）。原始 `model3.json` 是 VTube Studio 导出的、**没有 Expressions/Motions 字段**——桌宠服务会自动扫描 `Exp3/` 与 `Animation/` 生成增强版 manifest，于是 **23 个表情**（脸红/爱心眼/圈圈眼/黑脸/流泪/兔牙/单片眼镜…）与 **8 个动作**（IDLE/举手/狗尾草/竖手指/脱捕…）都能播放，物理摆动照常。
 - **鼻部色块修复**：大肥鱼鼻子层用「乘算黑 + 屏幕肤色」，旧渲染扩展会把鼻梁渲成异常色块。v0.22.1 在加载时把这类图层的乘算色改白（只改运行时、不动模型文件），鼻梁恢复自然肤色，已经真实模型 A/B 截图确认。
+- **贴图降采样（v0.22.2）**：模型 `.moc3` 版本为 **5（Cubism 5）**，运行库已用 Core 5.x + Cubism Web R7 匹配。原始 5 张贴图最高 8192×8192，超过很多真机 WebGL 的 `MAX_TEXTURE_SIZE`（4096/8192），会造成贴图上传失败、脸部/贴图异常——这正是「贴图 4096 网页渲染先降到 2048」的经验解法。桌宠服务启动时会用纯 Node 零依赖方式把超限贴图缩到 **≤2048**，缓存到 `pet/.texcache/`（按模型 hash 隔离、可复用），`runtime.model3.json` 自动指向缓存；**原模型目录只读、贴图绝不入库或再分发**。贴图本就 ≤2048 时直接跳过。
+- **表情不串脸（v0.22.2）**：切换表情前先把上一表情写入的 `key1..key13` 自定义参数复位到模型默认值，避免多个表情叠加残留导致脸部越切越怪（深红脸颊/畸形嘴块）。
 - **交互**：透明无边框、置顶、可拖动（拖动按帧合并 IPC，不闪）；点她会触发表情与动作；托盘可显示/隐藏、切鼠标穿透、退出。
 - **双向桥接**：桌宠本机 HTTP（只监听 127.0.0.1、Bearer token）暴露 `/api/state`（当前表情/动作/显示状态 + 表情动作目录）、`/api/commands`（插件→桌宠命令队列）、`/api/events`（桌宠→插件事件队列）、`/api/action`、`/api/reload`，并兼容旧 `/say`、`/call/<tool>`。面板与模型都能发台词、表情、动作；面板还能读到桌宠点击/拖拽事件。
 - **共享临场意图（presence）**：一份「表情 + 动作 + 短气泡」的意图可同时作用于 Live2D 桌宠和面板里的像素小屋/院子，让两种形象表现同一状态（带去重与过期，重连不重播）。面板桌宠 tab 有「临场意图」入口，模型可用 `companion_pet` 的 `op=presence` 主动触发。

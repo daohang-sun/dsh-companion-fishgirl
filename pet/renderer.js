@@ -37,6 +37,12 @@
     expressionCache: 0,
     lastPresenceId: '',
     catalog: () => catalog,
+    glMaxTextureSize: 0,
+    textureUrls: [],
+    activeExpression: '',
+    paramSnapshot: () => ({}),
+    _probeActive: false,
+    _probeValues: {},
   }
 
   function showBubble(text, ms) {
@@ -48,9 +54,9 @@
   }
   function setHint(text) { hint.textContent = text || '' }
 
-  async function sendEvent(type, extra) {
+  async function sendEvent(type, extra, force = false) {
     const now = Date.now()
-    if (now - lastEventSending < 80) return
+    if (!force && now - lastEventSending < 80) return
     lastEventSending = now
     try {
       await fetch(API + '/api/events', { method: 'POST', headers: H(TOKEN),
@@ -101,13 +107,46 @@
   // pixi-live2d-display 的 expressionManager.setExpression 在这份 VTS 模型上返回 false
   // （其 _loadExpression 未针对本模型实现），所以走参数直写更可靠。
   // 启动时把全部 exp3 预载进 expressionCache，切表情不再重复请求网络。
+  //
+  // 关键修复（脸部异常/深红脸颊+畸形嘴块的真正原因）：
+  // 之前切换表情只替换 activeExp，旧表情写入的 key 参数没有被归零/复位。
+  // 这些 key 参数是模型自定义参数，idle 动作不会覆盖，于是多个表情的参数
+  // 会叠加残留（脸红 key7=1 + 爱心眼 key4=1 + …），越切脸越奇形怪状。
+  // 现在：切换/清除前先把已应用参数恢复到模型默认值，再淡入新表情。
   const expressionCache = new Map()
   let activeExp = null
+  let appliedDefault = new Map()   // id -> 该参数的模型默认值（用于切表情时复位）
 
   function expParams(exp) {
     return Array.isArray(exp && exp.Parameters)
       ? exp.Parameters.map(p => ({ id: p.Id, value: Number(p.Value) || 0 }))
       : []
+  }
+
+  // 读取参数的模型默认值：优先用 core 的 defaultValues，读不到则回退 0。
+  function paramDefault(core, id) {
+    try {
+      if (typeof core.getParameterIndex === 'function' && typeof core.getParameterDefaultValue === 'function') {
+        const idx = core.getParameterIndex(id)
+        if (idx >= 0) {
+          const v = core.getParameterDefaultValue(idx)
+          if (Number.isFinite(v)) return v
+        }
+      }
+    } catch {}
+    return 0
+  }
+
+  // 把上一个表情写入过的参数恢复到默认值，避免表情叠加残留。
+  function clearAppliedExpression() {
+    if (!model || appliedDefault.size === 0) { appliedDefault = new Map(); return }
+    const core = model.internalModel && model.internalModel.coreModel
+    if (core && typeof core.setParameterValueById === 'function') {
+      for (const [id, def] of appliedDefault) {
+        try { core.setParameterValueById(id, def) } catch {}
+      }
+    }
+    appliedDefault = new Map()
   }
 
   async function preloadExpressions() {
@@ -123,10 +162,26 @@
     void sendEvent('expressions_preloaded', { count: expressionCache.size })
   }
 
+  function setActive(name, params) {
+    // 切换前先复位旧表情参数，杜绝叠加残留（脸部异常的根因）。
+    clearAppliedExpression()
+    if (!name || !params || !params.length) { activeExp = null; return }
+    const core = model && model.internalModel && model.internalModel.coreModel
+    appliedDefault = new Map()
+    for (const p of params) {
+      if (!appliedDefault.has(p.id)) appliedDefault.set(p.id, core ? paramDefault(core, p.id) : 0)
+    }
+    activeExp = { name, params, startedAt: performance.now() }
+    window.__fishPet.activeExpression = name
+    if (qs.get('debug') === '1') document.title = 'EXPR ' + name + ' params=' + params.map(p => p.id + '=' + p.value).join(',')
+  }
+
   function applyExpression(name) {
     if (!model) return
     if (!name) {
       activeExp = null
+      window.__fishPet.activeExpression = ''
+      clearAppliedExpression()
       // 不用 model.expression()（它会随机挑一个表情），改为显式 reset。
       try {
         const mgr = model.internalModel && model.internalModel.motionManager && model.internalModel.motionManager.expressionManager
@@ -135,18 +190,14 @@
       return
     }
     const cached = expressionCache.get(name)
-    if (cached) {
-      activeExp = { name, params: cached, startedAt: performance.now() }
-      if (qs.get('debug') === '1') document.title = 'EXPR ' + name + ' params=' + cached.map(p => p.id + '=' + p.value).join(',')
-      return
-    }
+    if (cached) { setActive(name, cached); return }
     // 缓存未命中（例如运行中新增表情）：懒加载一次后写入缓存。
     const hit = catalog.expression.find(x => x.name === name)
       || { name, file: API + '/model/Exp3/' + encodeURIComponent(name + '.exp3.json') }
     fetch(hit.file, { headers: H(TOKEN) }).then(r => r.json()).then(exp => {
       const params = expParams(exp)
       expressionCache.set(name, params)
-      activeExp = { name, params, startedAt: performance.now() }
+      setActive(name, params)
     }).catch(() => {})
   }
 
@@ -155,8 +206,15 @@
     const core = model.internalModel && model.internalModel.coreModel
     if (!core || typeof core.setParameterValueById !== 'function') return
     const fade = Math.min(1, (performance.now() - activeExp.startedAt) / 450)
+    // 每帧从「默认值」向「默认值 + exp3 目标值」线性过渡，淡入平滑且不残留。
     for (const p of activeExp.params) {
-      try { core.setParameterValueById(p.id, p.value * fade) } catch {}
+      const def = appliedDefault.has(p.id) ? appliedDefault.get(p.id) : 0
+      try {
+        core.setParameterValueById(p.id, def + p.value * fade)
+        if (window.__fishPet._probeActive) {
+          window.__fishPet._probeValues[p.id] = core.getParameterValueById(p.id)
+        }
+      } catch {}
     }
   }
 
@@ -290,6 +348,13 @@
         motionPreload: 'ALL',
       })
       window.__fishPet.modelLoads++
+      // 诊断：读取真实 WebGL 纹理上限 + 模型贴图 URL，判断是否超过上限导致脸部纹理异常。
+      try {
+        const gl = app.renderer.gl
+        window.__fishPet.glMaxTextureSize = gl.getParameter(gl.MAX_TEXTURE_SIZE)
+        const runtime = await fetch(API + '/runtime.model3.json', { headers: H(TOKEN) }).then(r => r.json())
+        window.__fishPet.textureUrls = (runtime.FileReferences && runtime.FileReferences.Textures) || []
+      } catch {}
       // 鼻部修复：加载完成、加入舞台之前执行（只改运行时颜色，不写模型文件）。
       // ?noRepair=1 仅用于诊断对比，看看不修复时鼻部是否真的是黑块。
       if (qs.get('noRepair') !== '1') repairScreenColorLayers()
@@ -298,6 +363,14 @@
       // 否则参数被本帧几何计算忽略（写 Ticker/shared 都晚了一步）。
       const internal = model.internalModel
       internal.on && internal.on('beforeModelUpdate', applyExpressionFrame)
+      // 诊断：暴露当前表情写入的关键参数值，验证切换表情后无残留叠加。
+      window.__fishPet.paramSnapshot = () => {
+        const c = model && model.internalModel && model.internalModel.coreModel
+        const out = {}
+        if (!c || typeof c.getParameterValueById !== 'function') return out
+        for (const p of (activeExp ? activeExp.params : [])) out[p.id] = c.getParameterValueById(p.id)
+        return out
+      }
       model.on('hit', (areas) => {
         const tag = Array.isArray(areas) && areas.length ? areas.join(',') : 'body'
         sendEvent('hit', { area: tag })
@@ -322,6 +395,25 @@
       // 表情预载不阻塞 READY，后台进行。
       void preloadExpressions()
 
+      // 自测：连续切换表情，在参数写入点同步读数，验证表情生效且无残留。
+      if (qs.get('selftest') === 'expressions') {
+        void (async () => {
+          const wait = (ms) => new Promise(r => setTimeout(r, ms))
+          for (let i = 0; i < 50 && expressionCache.size < (catalog.expression || []).length; i++) await wait(100)
+          window.__fishPet._probeActive = true
+          const steps = []
+          for (const name of ['脸红', '爱心眼', '']) {
+            window.__fishPet._probeValues = {}
+            applyExpression(name)
+            await wait(600)
+            steps.push({ expr: name || '(清除)', values: { ...window.__fishPet._probeValues } })
+            try { void fetch(API + '/api/selftest', { method: 'POST', headers: H(TOKEN),
+              body: JSON.stringify({ steps: [...steps] }) }) } catch {}
+          }
+          window.__fishPet._probeActive = false
+        })()
+      }
+
       // 诊断截图：?capture=1 时把画布缩略图回传服务端（仅本机，便于验证渲染）
       if (qs.get('capture') === '1') {
         setTimeout(() => {
@@ -339,6 +431,8 @@
                 ready: window.__fishPet.ready, modelLoads: window.__fishPet.modelLoads,
                 repairedLayers: window.__fishPet.repairedLayers,
                 expressionCache: window.__fishPet.expressionCache,
+                glMaxTextureSize: window.__fishPet.glMaxTextureSize,
+                textureUrls: window.__fishPet.textureUrls,
               } }) })
           } catch {}
         }, 1500)
