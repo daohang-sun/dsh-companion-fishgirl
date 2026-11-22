@@ -1,0 +1,6 @@
+{
+  "_说明": "大肥鱼 Live2D 桌宠配置。modelPath 指向你自己从 DeepSeek免费公皮.zip 解压出的 DeepSeek 文件夹（里面有 大肥鱼.model3.json）。token/port 由桌宠启动时自动填写，请勿手改。",
+  "modelPath": "",
+  "port": 18731,
+  "token": ""
+}

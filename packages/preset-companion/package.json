@@ -1,0 +1,11 @@
+{
+  "name": "@deepseek-ai/dsh-preset-companion-fishgirl",
+  "version": "0.1.0",
+  "type": "module",
+  "dsh": { "bundle": { "patch": "cordis.patch.yml" } },
+  "exports": {
+    "./cordis.patch.yml": "./cordis.patch.yml",
+    "./package.json": "./package.json"
+  },
+  "files": ["cordis.patch.yml"]
+}

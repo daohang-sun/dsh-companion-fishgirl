@@ -1,0 +1,118 @@
+/**
+ * Live2D 桌宠桥接（v0.21.0，双向）
+ *
+ * 新的外部桌宠（pet/ 目录，Electron 或 server-only）自己加载用户本机的 Cubism 4
+ * 模型，并在本机 HTTP 服务暴露：
+ *   GET  /api/health  /api/state  /api/commands?after=  /api/events?after=
+ *   POST /api/action  /api/events  /api/reload
+ *   POST /say  /call/<tool>（兼容旧 WHALEL2D）
+ * 地址与 token 写在 pet/api.json。
+ *
+ * 设计边界：
+ *  - 本插件不打包/分发模型文件（合规）；模型只读用户自己解压的目录。
+ *  - api.json 的 token 只在宿主进程内存里，绝不下发浏览器；面板只拿状态与结果。
+ *  - 桌宠未开 / 未配置时，所有接口优雅降级，不影响小窝其它功能。
+ */
+
+import { readFile } from 'node:fs/promises'
+import { homedir } from 'node:os'
+import { isAbsolute, join } from 'node:path'
+
+const DEFAULT_DIRS = ['大肥鱼插件', 'deepfish-desktop-pet', 'DeepFish-desktop-pet', 'WHALEL2D']
+
+function userHome() {
+  return typeof process !== 'undefined' && process.env?.USERPROFILE
+    ? process.env.USERPROFILE
+    : (typeof process !== 'undefined' && process.env?.DSH_HOME ? process.env.DSH_HOME : homedir())
+}
+
+/** 解析 api.json 路径：显式配置优先，其次常见安装位置（含 pet/ 自身）。 */
+export function resolveApiPath(configured, extraDirs = []) {
+  if (typeof configured === 'string' && configured.trim()) {
+    const p = configured.trim()
+    return isAbsolute(p) || /^[A-Za-z]:[\\/]/.test(p) ? p : join(userHome(), p)
+  }
+  const roots = [userHome()]
+  if (typeof process !== 'undefined' && process.env?.DSH_HOME && process.env.DSH_HOME !== userHome()) {
+    roots.push(process.env.DSH_HOME)
+  }
+  const out = []
+  // extraDirs 可能是绝对路径（如插件自身的 dist/../pet）。path.join(root, absPath)
+  // 在 Windows 上不会让绝对路径覆盖前缀，会拼出 "C:\Users\x\D:\..." 这种无效路径，
+  // 所以绝对路径要直接加入候选，不能前缀化。
+  const isAbs = (p) => isAbsolute(p) || /^[A-Za-z]:[\\/]/.test(p)
+  for (const dir of extraDirs) {
+    if (isAbs(dir)) out.push(join(dir, 'api.json'))
+  }
+  const relativeDirs = [...extraDirs.filter((d) => !isAbs(d)), ...DEFAULT_DIRS]
+  for (const root of roots) {
+    for (const dir of relativeDirs) out.push(join(root, dir, 'api.json'))
+    out.push(join(root, 'api.json'))
+  }
+  return out
+}
+
+/** 读取 api.json → { baseUrl, token, path, version } 或 null。 */
+export async function readPetApi(configured, extraDirs = []) {
+  const candidates = resolveApiPath(configured, extraDirs)
+  const list = Array.isArray(candidates) ? candidates : [candidates]
+  for (const path of list) {
+    try {
+      const api = JSON.parse(await readFile(path, 'utf8'))
+      const url = typeof api.url === 'string' ? api.url.trim().replace(/\/+$/, '') : ''
+      const token = typeof api.token === 'string' ? api.token.trim() : ''
+      if (url && token) return { baseUrl: url, token, path, version: api.version || 1 }
+    } catch { /* 继续找下一个位置 */ }
+  }
+  return null
+}
+
+/** 桌宠不可用时给面板的可操作提示。 */
+export function petUnavailableError() {
+  return {
+    connected: false,
+    error: '未检测到 Live2D 桌宠。请先打开桌宠程序（dsh-companion-fishgirl/pet/start.cmd），'
+      + '它会自动读取你本机解压的大肥鱼模型并生成 api.json；也可在设置里手动指定 api.json 路径。',
+  }
+}
+
+/** 调用桌宠本机接口（所有请求从宿主发出，token 不进浏览器）。 */
+export async function callPet(api, route, body, timeoutMs = 15000, method = 'POST') {
+  const controller = typeof AbortController !== 'undefined' ? new AbortController() : null
+  const timer = controller ? setTimeout(() => controller.abort(), timeoutMs) : null
+  try {
+    const init = {
+      method,
+      headers: { 'content-type': 'application/json; charset=utf-8', authorization: 'Bearer ' + api.token },
+      signal: controller ? controller.signal : undefined,
+    }
+    if (method !== 'GET' && body !== undefined && body !== null) init.body = JSON.stringify(body)
+    const res = await fetch(api.baseUrl + route, init)
+    const text = await res.text()
+    let data
+    try { data = JSON.parse(text) } catch { data = { raw: text.slice(0, 2000) } }
+    if (!res.ok) throw new Error((data && (data.error || data.message)) || ('HTTP ' + res.status))
+    return data
+  } finally {
+    if (timer) clearTimeout(timer)
+  }
+}
+
+/** 从 MCP 风格返回里抽出可读文本。 */
+export function petText(result) {
+  if (!result) return ''
+  if (typeof result.text === 'string') return result.text
+  if (typeof result.content === 'string') return result.content
+  if (Array.isArray(result.content)) {
+    return result.content.map(c => (c && typeof c.text === 'string') ? c.text : '').filter(Boolean).join('\n')
+  }
+  if (typeof result.note === 'string') return result.note
+  return ''
+}
+
+/** 判断桌宠是否为新版（带完整状态 / 表情动作目录的协议）。 */
+export function isRichPet(api) {
+  return !!api && (api.version >= 2 || api.version === '2')
+}
+
+export default { resolveApiPath, readPetApi, petUnavailableError, callPet, petText, isRichPet }

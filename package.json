@@ -1,0 +1,81 @@
+{
+  "name": "dsh-companion-fishgirl",
+  "version": "0.21.1",
+  "private": true,
+  "type": "module",
+  "description": "DeepSeek Harness 陪伴养成插件：美少女大肥鱼养成面板、跨窗口经历记忆与隐私清理。",
+  "icon": "./icon.png",
+  "keywords": [
+    "dsh",
+    "dsh-plugin",
+    "deepseek-harness",
+    "companion",
+    "大肥鱼"
+  ],
+  "main": "dist/companion.js",
+  "dsh": {
+    "bundle": {
+      "patch": "cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web",
+      "immediately": true,
+      "inject": [
+        "@deepseek-ai/dsh-client-ui-commands",
+        "@deepseek-ai/dsh-api-remotes"
+      ]
+    }
+  },
+  "exports": {
+    ".": "./dist/companion.js",
+    "./dist/companion.js": "./dist/companion.js",
+    "./cordis.patch.yml": "./cordis.patch.yml",
+    "./client": "./client.js",
+    "./client.js": "./client.js",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "icon.png",
+    "dist/companion.js",
+    "client.js",
+    "src/index.ts",
+    "src/home.ts",
+    "src/memory-modes.ts",
+    "src/pet-bridge.ts",
+    "cordis.patch.yml",
+    "README.md",
+    "CHANGELOG.md",
+    "pet/main.js",
+    "pet/preload.js",
+    "pet/index.html",
+    "pet/renderer.js",
+    "pet/server.mjs",
+    "pet/server-only.mjs",
+    "pet/launch.mjs",
+    "pet/launch-electron.mjs",
+    "pet/package.json",
+    "pet/config.example.json",
+    "pet/start.cmd",
+    "pet/start-browser.cmd",
+    "pet/start-electron.cmd",
+    "pet/vendor/pixi.min.js",
+    "pet/vendor/live2dcubismcore.min.js",
+    "pet/vendor/cubism4.min.js",
+    "assets/cabin/layers.json",
+    "assets/cabin/*.png",
+    "pet/README.md"
+  ],
+  "_peerNote": "dsh profile-resolution 的 routeLinked 通过读取 peerDependencies 的键名决定是否把内置 @deepseek-ai/* 包路由给本插件（见 dsh-app-boot profile-resolution-bootstrap.js）。这两组必须声明，否则 link:/file: 安装时这些 import 会走原生解析并报 ERR_MODULE_NOT_FOUND。范围写宽松即可，autoInstallPeers=false 时不会被真的安装，只用于路由匹配。",
+  "peerDependencies": {
+    "@deepseek-ai/cordis": ">=4.0.1",
+    "@deepseek-ai/dsh-anonymous-user-id": ">=0.2.0",
+    "@deepseek-ai/dsh-llm": ">=0.2.0",
+    "@deepseek-ai/dsh-session": ">=0.2.0",
+    "@deepseek-ai/dsh-storage-domain": ">=0.2.0",
+    "@deepseek-ai/dsh-tools": ">=0.2.0",
+    "zod": ">=3.23.0"
+  },
+  "scripts": {
+    "build": "npx --yes esbuild src/index.ts --bundle --format=esm --platform=node --target=node20 --charset=utf8 --outfile=dist/companion.js --external:@deepseek-ai/* --external:zod"
+  }
+}

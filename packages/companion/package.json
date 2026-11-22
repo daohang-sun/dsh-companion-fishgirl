@@ -1,0 +1,21 @@
+{
+  "name": "@deepseek-ai/dsh-companion",
+  "version": "0.1.0",
+  "type": "module",
+  "main": "lib/index.js",
+  "types": "lib/types/index.d.ts",
+  "exports": {
+    ".": { "types": "./lib/types/index.d.ts", "default": "./lib/index.js" },
+    "./rules": { "types": "./lib/types/rules.d.ts", "default": "./lib/rules.js" }
+  },
+  "peerDependencies": {
+    "@deepseek-ai/cordis": "*",
+    "@deepseek-ai/dsh-session": "*"
+  },
+  "devDependencies": {
+    "@deepseek-ai/cordis": "*",
+    "@deepseek-ai/dsh-session": "*",
+    "typescript": "^5.6.0"
+  },
+  "files": ["lib/index.js", "lib/rules.js", "lib/types/**/*.d.ts", "src"]
+}

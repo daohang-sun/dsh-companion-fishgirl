@@ -1,0 +1,15 @@
+{
+  "name": "@deepseek-ai/dsh-tool-companion",
+  "version": "0.1.0",
+  "type": "module",
+  "main": "lib/index.js",
+  "types": "lib/types/index.d.ts",
+  "exports": { ".": { "types": "./lib/types/index.d.ts", "default": "./lib/index.js" } },
+  "peerDependencies": {
+    "@deepseek-ai/cordis": "*",
+    "@deepseek-ai/dsh-tools": "*",
+    "@deepseek-ai/dsh-companion": "*"
+  },
+  "devDependencies": { "@deepseek-ai/cordis": "*", "@deepseek-ai/dsh-tools": "*", "typescript": "^5.6.0" },
+  "files": ["lib/index.js", "lib/types/**/*.d.ts", "src"]
+}
