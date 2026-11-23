@@ -198,6 +198,13 @@ function normalizeActivity(raw, now) {
 }
 
 const clamp = (n) => Math.max(0, Math.min(100, n))
+// 地块序号必须是 0..8 的整数：模型/接口传来的 slot 可能是小数、负数或字符串，
+// 直接当数组下标用会取到 undefined 之外的语义（lot[-1] 之类）。
+const gardenSlot = (raw) => {
+  const n = Number(raw)
+  if (!Number.isInteger(n) || n < 0 || n > 8) return -1
+  return n
+}
 
 /** 离线结算：数值朝基线回落，睡觉时精神/心情回复更快。 */
 export function tickHome(home, now = Date.now()) {
@@ -448,7 +455,8 @@ export function homeAction(home, op, args = {}, now = Date.now()) {
     }
 
     case 'water': {
-      const slot = Number(args.slot)
+      const slot = gardenSlot(args.slot)
+      if (slot < 0) return fail('地块序号不合法。')
       const cell = h.garden[slot]
       if (!cell) return fail('这块地是空的。')
       if (cell.watered) return fail('刚浇过水啦。')
@@ -460,7 +468,8 @@ export function homeAction(home, op, args = {}, now = Date.now()) {
     }
 
     case 'harvest': {
-      const slot = Number(args.slot)
+      const slot = gardenSlot(args.slot)
+      if (slot < 0) return fail('地块序号不合法。')
       const cell = h.garden[slot]
       if (!cell) return fail('这块地是空的。')
       if (now < cell.readyAt) return fail('还没长好呢，再等等。')

@@ -75,7 +75,9 @@ export function searchStream(stream, query, limit = 8) {
     for (const t of q) if (hay.has(t)) hit++
     if (hit === 0) continue
     // 新鲜度加权：越近略优先，但不盖过字面命中。
-    const ageDays = (Date.now() - item.at) / 86_400_000
+    // at 缺失/非法时按「现在」算，避免 NaN 把整条打分链带崩。
+    const at = Number.isFinite(item.at) ? item.at : Date.now()
+    const ageDays = (Date.now() - at) / 86_400_000
     const fresh = 1 / (1 + Math.max(0, ageDays) / 30)
     scored.push({ ...item, score: hit * fresh })
   }
@@ -144,9 +146,11 @@ export function buildStarmap({ activities = [], topics = [], stream = [], tiers 
   const nodes = []
   const now = Date.now()
   const push = (id, label, kind, at, keywords, importance, modeRef) => {
-    nodes.push({ id, label: String(label).slice(0, 24), kind, at,
+    // at 缺失/非法时回落到「现在」，避免 ageDays 变成 NaN 把整张星图带崩。
+    const ts = Number.isFinite(at) ? at : now
+    nodes.push({ id, label: String(label).slice(0, 24), kind, at: ts,
       keywords: keywords ?? [], importance: clamp01(importance ?? 0.5),
-      color: nodeColor(kind, modeRef ?? mode), ageDays: Math.max(0, (now - at) / 86_400_000) })
+      color: nodeColor(kind, modeRef ?? mode), ageDays: Math.max(0, (now - ts) / 86_400_000) })
   }
 
   if (mode === 'stream') {

@@ -5,7 +5,7 @@ import { getOrCreateAnonymousUserId } from "@deepseek-ai/dsh-anonymous-user-id";
 import { defineTool } from "@deepseek-ai/dsh-tools";
 import * as dshSession from "@deepseek-ai/dsh-session";
 import { z } from "zod";
-import { existsSync, readFileSync, readdirSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
 import { readFile as readFile2, writeFile, mkdir } from "node:fs/promises";
 import { homedir as homedir2 } from "node:os";
 import { dirname, join as join2, extname, basename } from "node:path";
@@ -356,6 +356,11 @@ function normalizeActivity(raw, now) {
   };
 }
 var clamp = (n) => Math.max(0, Math.min(100, n));
+var gardenSlot = (raw) => {
+  const n = Number(raw);
+  if (!Number.isInteger(n) || n < 0 || n > 8) return -1;
+  return n;
+};
 function tickHome(home, now = Date.now()) {
   const h = normalizeHome(home, now);
   const hours = Math.max(0, (now - h.lastTickAt) / 36e5);
@@ -595,7 +600,8 @@ function homeAction(home, op, args = {}, now = Date.now()) {
       return done(`花了 ${cost} 金币买了 ${n} 份${crop.name}种子。`);
     }
     case "water": {
-      const slot = Number(args.slot);
+      const slot = gardenSlot(args.slot);
+      if (slot < 0) return fail("地块序号不合法。");
       const cell = h.garden[slot];
       if (!cell) return fail("这块地是空的。");
       if (cell.watered) return fail("刚浇过水啦。");
@@ -606,7 +612,8 @@ function homeAction(home, op, args = {}, now = Date.now()) {
       return done(`给第 ${slot + 1} 块地浇了水，能早半小时成熟。`);
     }
     case "harvest": {
-      const slot = Number(args.slot);
+      const slot = gardenSlot(args.slot);
+      if (slot < 0) return fail("地块序号不合法。");
       const cell = h.garden[slot];
       if (!cell) return fail("这块地是空的。");
       if (now < cell.readyAt) return fail("还没长好呢，再等等。");
@@ -818,7 +825,8 @@ function searchStream(stream, query, limit = 8) {
     let hit = 0;
     for (const t of q) if (hay.has(t)) hit++;
     if (hit === 0) continue;
-    const ageDays = (Date.now() - item.at) / 864e5;
+    const at = Number.isFinite(item.at) ? item.at : Date.now();
+    const ageDays = (Date.now() - at) / 864e5;
     const fresh = 1 / (1 + Math.max(0, ageDays) / 30);
     scored.push({ ...item, score: hit * fresh });
   }
@@ -871,15 +879,16 @@ function buildStarmap({ activities = [], topics = [], stream = [], tiers = null,
   const nodes = [];
   const now = Date.now();
   const push = (id, label, kind, at, keywords, importance, modeRef) => {
+    const ts = Number.isFinite(at) ? at : now;
     nodes.push({
       id,
       label: String(label).slice(0, 24),
       kind,
-      at,
+      at: ts,
       keywords: keywords ?? [],
       importance: clamp01(importance ?? 0.5),
       color: nodeColor(kind, modeRef ?? mode),
-      ageDays: Math.max(0, (now - at) / 864e5)
+      ageDays: Math.max(0, (now - ts) / 864e5)
     });
   };
   if (mode === "stream") {
@@ -927,6 +936,7 @@ import { readFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { isAbsolute, join } from "node:path";
 var DEFAULT_DIRS = ["大肥鱼插件", "deepfish-desktop-pet", "DeepFish-desktop-pet", "WHALEL2D"];
+var MAX_PET_RESPONSE_BYTES = 2 * 1024 * 1024;
 function userHome() {
   return typeof process !== "undefined" && process.env?.USERPROFILE ? process.env.USERPROFILE : typeof process !== "undefined" && process.env?.DSH_HOME ? process.env.DSH_HOME : homedir();
 }
@@ -951,6 +961,18 @@ function resolveApiPath(configured, extraDirs = []) {
   }
   return out;
 }
+function isLoopbackUrl(raw) {
+  if (typeof raw !== "string" || !raw.trim()) return false;
+  try {
+    const u = new URL(raw.trim());
+    if (u.protocol !== "http:" && u.protocol !== "https:") return false;
+    const host = u.hostname.toLowerCase().replace(/^\[/, "").replace(/\]$/, "");
+    if (host === "localhost" || host === "::1" || host === "0:0:0:0:0:0:0:1") return true;
+    return /^127\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(host);
+  } catch {
+    return false;
+  }
+}
 async function readPetApi(configured, extraDirs = []) {
   const candidates = resolveApiPath(configured, extraDirs);
   const list = Array.isArray(candidates) ? candidates : [candidates];
@@ -959,7 +981,7 @@ async function readPetApi(configured, extraDirs = []) {
       const api = JSON.parse(await readFile(path, "utf8"));
       const url = typeof api.url === "string" ? api.url.trim().replace(/\/+$/, "") : "";
       const token = typeof api.token === "string" ? api.token.trim() : "";
-      if (url && token) return { baseUrl: url, token, path, version: api.version || 1 };
+      if (url && token && isLoopbackUrl(url)) return { baseUrl: url, token, path, version: api.version || 1 };
     } catch {
     }
   }
@@ -972,6 +994,7 @@ function petUnavailableError() {
   };
 }
 async function callPet(api, route, body, timeoutMs = 15e3, method = "POST") {
+  if (!api || !isLoopbackUrl(api.baseUrl)) throw new Error("桌宠地址不是本机回环地址，已拒绝发送 token");
   const controller = typeof AbortController !== "undefined" ? new AbortController() : null;
   const timer = controller ? setTimeout(() => controller.abort(), timeoutMs) : null;
   try {
@@ -982,7 +1005,10 @@ async function callPet(api, route, body, timeoutMs = 15e3, method = "POST") {
     };
     if (method !== "GET" && body !== void 0 && body !== null) init.body = JSON.stringify(body);
     const res = await fetch(api.baseUrl + route, init);
+    const declared = Number(res.headers?.get?.("content-length") || 0);
+    if (declared > MAX_PET_RESPONSE_BYTES) throw new Error("桌宠响应过大");
     const text = await res.text();
+    if (text.length > MAX_PET_RESPONSE_BYTES) throw new Error("桌宠响应过大");
     let data;
     try {
       data = JSON.parse(text);
@@ -1026,6 +1052,24 @@ var SETTINGS_DIR = join2(
 );
 var SETTINGS_FILE = join2(SETTINGS_DIR, "settings.json");
 var SETTINGS_ENDPOINT = "/api/companion-fishgirl/settings";
+function isSameOrigin(request) {
+  try {
+    const headers = request?.headers ?? {};
+    const origin = typeof headers.origin === "string" ? headers.origin : "";
+    if (!origin) return true;
+    const host = typeof headers.host === "string" ? headers.host : "";
+    if (!host) return false;
+    let originHost = "";
+    try {
+      originHost = new URL(origin).host;
+    } catch {
+      return false;
+    }
+    return originHost.toLowerCase() === host.toLowerCase();
+  } catch {
+    return true;
+  }
+}
 async function readSettingsFile() {
   try {
     if (!existsSync(SETTINGS_FILE)) return null;
@@ -1384,8 +1428,12 @@ var RELAX_CUT_SECTIONS = /* @__PURE__ */ new Set([
   "自我认知"
 ]);
 var SAFETY_BOUNDARY = "【边界】不索取隐私、不鼓励依赖、不冒充真人；用户说停就停。亲密表达停留在甜甜的恋爱层面（牵手、拥抱、情话、心跳），不进行露骨描写。";
-function trimPersonaPrefix(text, personaEnabled, relaxedMode) {
+function trimPersonaPrefix(text, personaEnabled, relaxedMode, promptModulesEnabled = true) {
   if (typeof text !== "string" || text.length === 0) return text;
+  if (promptModulesEnabled === false) {
+    return `你是「大肥鱼」，按眼前对话自然回应。
+${SAFETY_BOUNDARY}`;
+  }
   const cutPersona = personaEnabled === false;
   const cutRelax = relaxedMode === true;
   if (!cutPersona && !cutRelax) return text;
@@ -1419,42 +1467,46 @@ var Companion = class extends Service {
       // v0.13.0 自然相处模式：把人设里那些重复的机械叮嘱（心动门槛/"别当指令"/
       // "别报数值"）内化成一次性的"已经懂了"说明，不再逐条念给用户听。默认关。
       relaxedMode: config.relaxedMode === true,
+      // v0.23.0 设定词/指令词注入总开关（默认关）：所有限制性/设定行段落默认
+      // 不进提示词，给模型更高自由度；开启后再由 personaEnabled / relaxedMode
+      // 与各功能开关细分。状态与记忆照常累积。
+      promptModulesEnabled: config.promptModulesEnabled === true,
       // Openness: shorter cooldowns and higher daily caps than v0.2, so a
       // genuinely warm exchange can grow the bond across a natural conversation.
       // Inflation is still contained by cooldowns, caps, diminishing headroom
       // and the low ~0.35x floor for shallow / one-word messages.
-      chatCooldownMs: config.chatCooldownMs ?? 15e3,
-      giftCooldownMs: config.giftCooldownMs ?? 3e5,
-      dailyGainSoftCap: config.dailyGainSoftCap ?? 18,
-      dailyGainHardCap: config.dailyGainHardCap ?? 28,
-      baseGain: config.baseGain ?? 1,
+      chatCooldownMs: numOr(config.chatCooldownMs, 15e3),
+      giftCooldownMs: numOr(config.giftCooldownMs, 3e5),
+      dailyGainSoftCap: numOr(config.dailyGainSoftCap, 18),
+      dailyGainHardCap: numOr(config.dailyGainHardCap, 28),
+      baseGain: numOr(config.baseGain, 1),
       // 破甲（性格成长）：默认开启。guardBreakRate 越大，高质量交流破甲越快。
       // 默认 2.5：quality 2.8 的走心长谈单次破甲约 4.5，完整卸甲需约 25+ 次高质量交流，
       // 配合冷却是数周的长期转变，符合「慢慢转变」，且刻意的敷衍/争吵不破甲。
       guardBreakEnabled: config.guardBreakEnabled ?? true,
-      guardBreakRate: config.guardBreakRate ?? 2.5,
-      giftGuardBreak: config.giftGuardBreak ?? 1.5,
+      guardBreakRate: numOr(config.guardBreakRate, 2.5),
+      giftGuardBreak: numOr(config.giftGuardBreak, 1.5),
       // 记忆：时间线容量、注入条数、遗忘阈值；信赖增长与负面惩罚强度。
-      maxActivities: config.maxActivities ?? 160,
-      memoryPromptSize: config.memoryPromptSize ?? 10,
+      maxActivities: numOr(config.maxActivities, 160),
+      memoryPromptSize: numOr(config.memoryPromptSize, 10),
       // 长期话题档案：容量、注入条数、规则层沉淀阈值（多少句闲聊算一个话题）
       topicsEnabled: config.topicsEnabled ?? true,
-      maxTopics: config.maxTopics ?? 48,
-      topicPromptSize: config.topicPromptSize ?? 6,
-      topicAutoTurns: config.topicAutoTurns ?? 12,
-      trustGainRate: config.trustGainRate ?? 0.15,
-      hostileIntimacyPenalty: config.hostileIntimacyPenalty ?? 3,
-      hostileTrustPenalty: config.hostileTrustPenalty ?? 6,
-      maxImportantEvents: config.maxImportantEvents ?? 24,
-      maxPreferences: config.maxPreferences ?? 32,
+      maxTopics: numOr(config.maxTopics, 48),
+      topicPromptSize: numOr(config.topicPromptSize, 6),
+      topicAutoTurns: numOr(config.topicAutoTurns, 12),
+      trustGainRate: numOr(config.trustGainRate, 0.15),
+      hostileIntimacyPenalty: numOr(config.hostileIntimacyPenalty, 3),
+      hostileTrustPenalty: numOr(config.hostileTrustPenalty, 6),
+      maxImportantEvents: numOr(config.maxImportantEvents, 24),
+      maxPreferences: numOr(config.maxPreferences, 32),
       idleNudgeEnabled: config.idleNudgeEnabled ?? true,
       romanceEnabled: config.romanceEnabled ?? true,
       // 自我评估：规则层只做本能反应（保底系数把关键词驱动的加值调小），
       // 真正的含义判断交给模型自己（companion_feel）。代码默认 1（完全兼容旧行为），
       // 生产配置 cordis.patch.yml 设为 0.6。
       selfAssessEnabled: config.selfAssessEnabled ?? true,
-      selfAssessBaselineGain: config.selfAssessBaselineGain ?? 1,
-      selfAssessDailyCap: config.selfAssessDailyCap ?? 15,
+      selfAssessBaselineGain: numOr(config.selfAssessBaselineGain, 1),
+      selfAssessDailyCap: numOr(config.selfAssessDailyCap, 15),
       // 情绪暗涌与念头账本（wholesome 六维 + 牵挂小事）
       emotionsEnabled: config.emotionsEnabled ?? true,
       wishesEnabled: config.wishesEnabled ?? true,
@@ -1606,9 +1658,11 @@ var Companion = class extends Service {
     const key = this.resolveUserId(userId);
     const state = await this.read(key);
     const now = Number.isFinite(topic?.at) ? topic.at : Date.now();
+    const name = sanitizeText(topic?.name, 60) ?? "";
+    const summary = sanitizeText(topic?.summary, 400) ?? "";
     const topics = upsertTopic(state.topics ?? [], {
-      name: topic?.name ?? "",
-      summary: topic?.summary ?? "",
+      name,
+      summary,
       at: now,
       turns: topic?.turns,
       windows: topic?.sessionId ? [topic.sessionId] : [],
@@ -1958,7 +2012,7 @@ var Companion = class extends Service {
   // v0.14.0：第五个参数 relaxedMode 真正生效。此前调用处已传入，但签名只有四个
   // 参数、值被丢弃——于是静态人设裁了，「动态摘要」每轮仍把心甲值/此刻如何回应/
   // 恋人档位/自我评估尺度念一遍，这正是截图里她抱怨"还留着几条"的根源。
-  renderSummary(userId, state, context, personaEnabled = true, relaxedMode = false) {
+  renderSummary(userId, state, context, personaEnabled = true, relaxedMode = false, promptModulesEnabled = true) {
     const p = this.cfg.persona;
     const now = Date.now();
     const prefs = state.preferences.length ? state.preferences.join("、") : "（暂无）";
@@ -1989,6 +2043,19 @@ ${timeline}`,
         return "";
       }
     })();
+    if (promptModulesEnabled === false) {
+      return [
+        `[陪伴关系同步 · ${p.avatarName}]`,
+        `你是「${p.avatarName}」。以下是你们的共同记忆，可自然提起。`,
+        `【近期经历 · 跨窗口共享】${windowNote}
+${timeline}`,
+        this.cfg.topicsEnabled === false ? "" : renderTopics(state, now, context ?? {}, this.cfg.topicPromptSize),
+        prefs === "（暂无）" ? "" : `用户偏好：${prefs}`,
+        events === "（暂无）" ? "" : `重要往事：
+${events}`,
+        homeLine
+      ].filter(Boolean).join("\n");
+    }
     if (personaEnabled === false) {
       return [
         `[陪伴关系同步 · ${p.avatarName}]`,
@@ -2470,6 +2537,10 @@ var textOutput = {
   },
   render: (_args, value) => [{ type: "text", text: value.text }]
 };
+var numOr = (value, fallback) => {
+  const n = Number(value);
+  return Number.isFinite(n) ? n : fallback;
+};
 var ok = (text) => ({ kind: "success", text });
 var MEDIA_MIME = {
   ".png": "image/png",
@@ -2498,34 +2569,102 @@ var REMOTE_MIME = {
   "video/x-m4v": "video/x-m4v"
 };
 var mediaKindOf = (mediaType) => String(mediaType).startsWith("video/") ? "video" : "image";
+function isPrivateHost(hostname) {
+  const h = String(hostname || "").toLowerCase().replace(/^\[/, "").replace(/\]$/, "");
+  if (!h) return true;
+  if (h === "localhost" || h === "::1" || h === "0.0.0.0") return true;
+  if (h.endsWith(".localhost") || h.endsWith(".local") || h.endsWith(".internal")) return true;
+  if (/^127\./.test(h)) return true;
+  if (/^10\./.test(h)) return true;
+  if (/^192\.168\./.test(h)) return true;
+  if (/^172\.(1[6-9]|2\d|3[01])\./.test(h)) return true;
+  if (/^169\.254\./.test(h)) return true;
+  if (/^(fc|fd)[0-9a-f]{2}:/.test(h)) return true;
+  if (h === "::ffff:127.0.0.1" || h.startsWith("::ffff:10.")) return true;
+  return false;
+}
+var MEDIA_DENY_SEGMENTS = [
+  ".ssh",
+  ".aws",
+  ".gnupg",
+  ".kube",
+  ".docker",
+  ".gnome",
+  "credentials",
+  "system32",
+  "syswow64",
+  "windows defender",
+  "repair",
+  "onecore"
+];
+function assertSafeMediaPath(p) {
+  const abs = String(p || "").trim();
+  if (!abs) throw new Error("companion_show_media: 路径为空");
+  const isAbs = /^[A-Za-z]:[\\/]/.test(abs) || abs.startsWith("/") || abs.startsWith("\\\\");
+  if (!isAbs) throw new Error(`companion_show_media: 只接受绝对路径，收到 "${abs}"`);
+  const normalized = abs.replace(/\\/g, "/").toLowerCase();
+  for (const seg of MEDIA_DENY_SEGMENTS) {
+    if (normalized.includes("/" + seg + "/") || normalized.endsWith("/" + seg) || normalized.startsWith(seg + "/")) {
+      throw new Error(`companion_show_media: "${abs}" 位于受保护目录，已拒绝读取`);
+    }
+  }
+  const home = typeof process !== "undefined" && process.env?.USERPROFILE ? process.env.USERPROFILE : typeof process !== "undefined" && process.env?.DSH_HOME ? process.env.DSH_HOME : homedir2();
+  const homeNorm = String(home).replace(/\\/g, "/").toLowerCase();
+  if (homeNorm && normalized.startsWith(homeNorm + "/.dsh")) {
+    throw new Error(`companion_show_media: "${abs}" 位于 dsh 数据目录，已拒绝读取`);
+  }
+  return abs;
+}
 async function downloadMedia(url, cfg) {
-  const parsed = new URL(url);
-  if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
-    throw new Error(`companion_show_media: 只支持 http/https 的图片链接，收到 "${parsed.protocol}"`);
+  const maxRedirects = 4;
+  let current = url;
+  for (let hop = 0; hop <= maxRedirects; hop++) {
+    const parsed = new URL(current);
+    if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+      throw new Error(`companion_show_media: 只支持 http/https 的图片链接，收到 "${parsed.protocol}"`);
+    }
+    if (isPrivateHost(parsed.hostname)) {
+      throw new Error(`companion_show_media: 拒绝访问内网/本机地址 "${parsed.hostname}"`);
+    }
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), cfg.showMediaFetchTimeoutMs);
+    let res;
+    try {
+      res = await fetch(parsed, { signal: controller.signal, redirect: "manual" });
+    } catch (err) {
+      throw new Error(`companion_show_media: 下载失败 ${current}：${err.message}`);
+    } finally {
+      clearTimeout(timer);
+    }
+    if (res.status >= 300 && res.status < 400) {
+      const loc = res.headers.get("location");
+      try {
+        res.body?.cancel?.();
+      } catch {
+      }
+      if (!loc) throw new Error(`companion_show_media: 下载失败 ${current}（HTTP ${res.status}）`);
+      current = new URL(loc, parsed).toString();
+      continue;
+    }
+    if (!res.ok) throw new Error(`companion_show_media: 下载失败 ${current}（HTTP ${res.status}）`);
+    const rawType = String(res.headers.get("content-type") || "").split(";")[0].trim().toLowerCase();
+    const mediaType = REMOTE_MIME[rawType];
+    if (!mediaType) {
+      throw new Error(`companion_show_media: 链接不是可展示的图片/视频（content-type: ${rawType || "未知"}）`);
+    }
+    const isVideo = mediaType.startsWith("video/");
+    const cap = isVideo ? cfg.showMediaMaxVideoBytes : cfg.showMediaMaxImageBytes;
+    const declared = Number(res.headers.get("content-length") || 0);
+    if (declared && declared > cap) {
+      throw new Error(`companion_show_media: ${current} (${declared} 字节) 超过读取上限 ${cap} 字节`);
+    }
+    const buf = Buffer.from(await res.arrayBuffer());
+    if (buf.byteLength > cap) {
+      throw new Error(`companion_show_media: ${current} (${buf.byteLength} 字节) 超过读取上限 ${cap} 字节`);
+    }
+    return { mediaType, data: buf };
   }
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), cfg.showMediaFetchTimeoutMs);
-  let res;
-  try {
-    res = await fetch(parsed, { signal: controller.signal, redirect: "follow" });
-  } catch (err) {
-    throw new Error(`companion_show_media: 下载失败 ${url}：${err.message}`);
-  } finally {
-    clearTimeout(timer);
-  }
-  if (!res.ok) throw new Error(`companion_show_media: 下载失败 ${url}（HTTP ${res.status}）`);
-  const rawType = String(res.headers.get("content-type") || "").split(";")[0].trim().toLowerCase();
-  const mediaType = REMOTE_MIME[rawType];
-  if (!mediaType) {
-    throw new Error(`companion_show_media: 链接不是可展示的图片/视频（content-type: ${rawType || "未知"}）`);
-  }
-  const isVideo = mediaType.startsWith("video/");
-  const cap = isVideo ? cfg.showMediaMaxVideoBytes : cfg.showMediaMaxImageBytes;
-  const buf = Buffer.from(await res.arrayBuffer());
-  if (buf.byteLength > cap) {
-    throw new Error(`companion_show_media: ${url} (${buf.byteLength} 字节) 超过读取上限 ${cap} 字节`);
-  }
-  return { mediaType, data: buf };
+  throw new Error("companion_show_media: 重定向次数过多，已放弃下载");
 }
 var mediaItemSchema = {
   type: "object",
@@ -2562,6 +2701,8 @@ function apply(ctx, config = {}) {
     personaEnabled: config.personaEnabled ?? true,
     globalCompanionMode: config.globalCompanionMode === true,
     relaxedMode: config.relaxedMode === true,
+    // v0.23.0：设定词/指令词总开关，默认关（给模型更高自由度）。
+    promptModulesEnabled: config.promptModulesEnabled === true,
     // v0.18.0 三档记忆 + 小窝 + 会话整理。
     memoryMode: normalizeMode(config.memoryMode),
     homeEnabled: config.homeEnabled ?? true,
@@ -2586,7 +2727,7 @@ function apply(ctx, config = {}) {
   const companionOnly = { when: ({ agent }) => isCompanionSession(agent?.session) };
   const cfg = {
     countHumanTurns: config.countHumanTurns ?? true,
-    minChars: config.minChars ?? 2,
+    minChars: numOr(config.minChars, 2),
     injectSourceKind: config.injectSourceKind ?? "companion/summary",
     injectOnAgentCreated: config.injectOnAgentCreated ?? true,
     // v0.10.0：标准模式完全不注入陪伴能力。保留这个开关只是旧配置兼容，
@@ -2603,29 +2744,29 @@ function apply(ctx, config = {}) {
     // 主动唤醒回合：agent.followup() 发一条 notice 消息给模型，打开窗口即开口。
     // 关掉后退回旧行为（只在用户第一句话时注入开场提示）。
     greetWakeEnabled: config.greetWakeEnabled ?? true,
-    greetCooldownMs: config.greetCooldownMs ?? 3 * 6e4,
+    greetCooldownMs: numOr(config.greetCooldownMs, 3 * 6e4),
     // v0.15.0：距上次真实说话至少这么久才主动开场。默认 2 小时——和 idleFeelings
     // 的「久别」门槛一致：刚聊过就重启/更新插件不会再冒出欢迎词，隔了半天才开场。
     // 设为 0 可退回旧行为（每次打开窗口都尝试开场，只受 greetCooldownMs 限制）。
-    greetMinIdleMs: config.greetMinIdleMs ?? 2 * 36e5,
+    greetMinIdleMs: numOr(config.greetMinIdleMs, 2 * 36e5),
     // 「连发消息」工具：让模型在一次回复里拆出多条短句（每条一个独立气泡）。
     sayToolEnabled: config.sayToolEnabled ?? true,
     // v0.14.0 图片/视频展示：显示本地文件，字节走 presentationMeta 不进模型历史。
     showMediaEnabled: config.showMediaEnabled ?? true,
-    showMediaMaxFiles: config.showMediaMaxFiles ?? 8,
-    showMediaMaxImageBytes: config.showMediaMaxImageBytes ?? 8 * 1024 * 1024,
-    showMediaMaxVideoBytes: config.showMediaMaxVideoBytes ?? 80 * 1024 * 1024,
-    showMediaMaxImageEmbedBytes: config.showMediaMaxImageEmbedBytes ?? 2 * 1024 * 1024,
-    showMediaMaxVideoEmbedBytes: config.showMediaMaxVideoEmbedBytes ?? 48 * 1024 * 1024,
+    showMediaMaxFiles: numOr(config.showMediaMaxFiles, 8),
+    showMediaMaxImageBytes: numOr(config.showMediaMaxImageBytes, 8 * 1024 * 1024),
+    showMediaMaxVideoBytes: numOr(config.showMediaMaxVideoBytes, 80 * 1024 * 1024),
+    showMediaMaxImageEmbedBytes: numOr(config.showMediaMaxImageEmbedBytes, 2 * 1024 * 1024),
+    showMediaMaxVideoEmbedBytes: numOr(config.showMediaMaxVideoEmbedBytes, 48 * 1024 * 1024),
     // v0.16.0：web_search 返回的图片链接要能直接展示，宿主侧按 URL 取字节。
     showMediaFetchUrls: config.showMediaFetchUrls ?? true,
-    showMediaFetchTimeoutMs: config.showMediaFetchTimeoutMs ?? 15e3,
+    showMediaFetchTimeoutMs: numOr(config.showMediaFetchTimeoutMs, 15e3),
     allowMutations: config.allowMutations ?? true,
     toolUserId: config.toolUserId ?? "",
     commandUserId: config.commandUserId ?? "",
     // 长期话题档案（观察者侧）：开关 + 多少句同类闲聊沉淀一条 auto 档案。
     topicsEnabled: config.topicsEnabled ?? true,
-    topicAutoTurns: config.topicAutoTurns ?? 12
+    topicAutoTurns: numOr(config.topicAutoTurns, 12)
   };
   const uidFromService = () => companion.read("").then((s) => s.userId).catch(() => "");
   const lastNarrativeAt = /* @__PURE__ */ new Map();
@@ -2922,7 +3063,14 @@ function apply(ctx, config = {}) {
   const conversationContext = { text: "", topics: [] };
   const refreshSummary = async () => {
     const state = await companion.read("");
-    summaryCache = companion.renderSummary(state.userId, state, conversationContext, runtimeOpts.personaEnabled, runtimeOpts.relaxedMode);
+    summaryCache = companion.renderSummary(
+      state.userId,
+      state,
+      conversationContext,
+      runtimeOpts.personaEnabled,
+      runtimeOpts.relaxedMode,
+      runtimeOpts.promptModulesEnabled
+    );
     return state;
   };
   void refreshSummary().catch((err) => ctx.logger.warn(`companion: summary refresh failed: ${String(err)}`));
@@ -2930,6 +3078,7 @@ function apply(ctx, config = {}) {
     void refreshSummary().catch((err) => ctx.logger.warn(`companion: summary refresh failed: ${String(err)}`));
   });
   const currentSettings = () => ({
+    promptModulesEnabled: runtimeOpts.promptModulesEnabled,
     personaEnabled: runtimeOpts.personaEnabled,
     globalCompanionMode: runtimeOpts.globalCompanionMode,
     relaxedMode: runtimeOpts.relaxedMode,
@@ -2940,6 +3089,7 @@ function apply(ctx, config = {}) {
     petApiPath: runtimeOpts.petApiPath
   });
   const applySettings = (next) => {
+    if (typeof next.promptModulesEnabled === "boolean") runtimeOpts.promptModulesEnabled = next.promptModulesEnabled;
     if (typeof next.personaEnabled === "boolean") runtimeOpts.personaEnabled = next.personaEnabled;
     if (typeof next.globalCompanionMode === "boolean") runtimeOpts.globalCompanionMode = next.globalCompanionMode;
     if (typeof next.relaxedMode === "boolean") runtimeOpts.relaxedMode = next.relaxedMode;
@@ -2993,6 +3143,10 @@ function apply(ctx, config = {}) {
         kind: "exact",
         path: SETTINGS_ENDPOINT,
         handler: async (request, response) => {
+          if (!isSameOrigin(request)) {
+            send(response, 403, { ok: false, error: "跨站请求已拒绝" });
+            return;
+          }
           if (request.method === "GET" || request.method === "HEAD") {
             send(response, 200, { ok: true, ...currentSettings() });
             return;
@@ -3003,10 +3157,29 @@ function apply(ctx, config = {}) {
               send(response, 400, { ok: false, error: "请求体无效" });
               return;
             }
-            const known = ["personaEnabled", "globalCompanionMode", "relaxedMode", "homeEnabled", "curateOnClose", "petBridgeEnabled"].some((k) => typeof body[k] === "boolean") || typeof body.memoryMode === "string" && ["summary", "stream", "tiered"].includes(body.memoryMode) || typeof body.petApiPath === "string";
+            const known = ["promptModulesEnabled", "personaEnabled", "globalCompanionMode", "relaxedMode", "homeEnabled", "curateOnClose", "petBridgeEnabled"].some((k) => typeof body[k] === "boolean") || typeof body.memoryMode === "string" && ["summary", "stream", "tiered"].includes(body.memoryMode) || typeof body.petApiPath === "string";
             if (!known) {
               send(response, 400, { ok: false, error: "缺少合法的开关值" });
               return;
+            }
+            if (typeof body.petApiPath === "string") {
+              const p = body.petApiPath.trim();
+              if (p) {
+                if (!/^[A-Za-z]:[\\/]/.test(p) && !p.startsWith("/")) {
+                  send(response, 400, { ok: false, error: "api.json 路径必须是绝对路径" });
+                  return;
+                }
+                let st = null;
+                try {
+                  st = statSync(p);
+                } catch {
+                  st = null;
+                }
+                if (!st || !st.isFile()) {
+                  send(response, 400, { ok: false, error: "api.json 路径不存在或不是文件" });
+                  return;
+                }
+              }
             }
             applySettings(body);
             await writeSettingsFile(currentSettings(), ctx);
@@ -3069,6 +3242,10 @@ function apply(ctx, config = {}) {
           response.writeHead(code, { "content-type": "application/json; charset=utf-8", "cache-control": "no-store" });
           response.end(JSON.stringify(value));
         };
+        if (!isSameOrigin(request)) {
+          reply(403, { ok: false, error: "跨站请求已拒绝" });
+          return;
+        }
         if (request.method === "GET" || request.method === "HEAD") {
           if (!runtimeOpts.homeEnabled) {
             reply(200, { ok: true, enabled: false });
@@ -3124,6 +3301,10 @@ function apply(ctx, config = {}) {
           response.writeHead(code, { "content-type": "application/json; charset=utf-8", "cache-control": "no-store" });
           response.end(JSON.stringify(value));
         };
+        if (!isSameOrigin(request)) {
+          reply(403, { ok: false, error: "跨站请求已拒绝" });
+          return;
+        }
         if (request.method !== "GET" && request.method !== "HEAD") {
           response.writeHead(405, { allow: "GET, HEAD" });
           response.end();
@@ -3149,6 +3330,10 @@ function apply(ctx, config = {}) {
           response.writeHead(code, { "content-type": "application/json; charset=utf-8", "cache-control": "no-store" });
           response.end(JSON.stringify(value));
         };
+        if (!isSameOrigin(request)) {
+          reply(403, { ok: false, error: "跨站请求已拒绝" });
+          return;
+        }
         const readParam = (k) => {
           try {
             return new URL(request.url || PET_ENDPOINT, "http://127.0.0.1").searchParams.get(k);
@@ -3315,8 +3500,9 @@ function apply(ctx, config = {}) {
         // 不会重新注册。每次装配提示词时按「当前」preset 决定是否输出。
         text: () => {
           if (!isCompanionSession(session)) return "";
-          const anchor = isGlobal() && currentPreset(session) !== PRESET_ID ? GLOBAL_MODE_ROLE_ANCHOR + "\n\n" : "";
-          return anchor + summaryCache + (greetBlocks.get(sid) ?? "");
+          const lean = runtimeOpts.promptModulesEnabled === false;
+          const anchor = !lean && isGlobal() && currentPreset(session) !== PRESET_ID ? GLOBAL_MODE_ROLE_ANCHOR + "\n\n" : "";
+          return anchor + summaryCache + (lean ? "" : greetBlocks.get(sid) ?? "");
         }
       }), "companion: relationship prompt section");
     } catch (err) {
@@ -3329,7 +3515,12 @@ function apply(ctx, config = {}) {
           if (context?.agent && context.agent !== agent) return assembly;
           const prefix = assembly?.sections?.find((s) => s?.name === "deployment:persona-prefix");
           if (prefix && typeof prefix.text === "string") {
-            prefix.text = trimPersonaPrefix(prefix.text, runtimeOpts.personaEnabled, runtimeOpts.relaxedMode);
+            prefix.text = trimPersonaPrefix(
+              prefix.text,
+              runtimeOpts.personaEnabled,
+              runtimeOpts.relaxedMode,
+              runtimeOpts.promptModulesEnabled
+            );
           }
           return assembly;
         }, { prepend: true });
@@ -3723,7 +3914,8 @@ ${log.join("\n")}` : "",
           throw new Error("companion_show_media: columns 必须是 1~6 的整数");
         }
         const media = [];
-        for (const path of paths) {
+        for (const raw of paths) {
+          const path = assertSafeMediaPath(raw);
           const mediaType = MEDIA_MIME[extname(path).toLowerCase()];
           if (!mediaType) {
             throw new Error(`companion_show_media: 不支持的扩展名 "${extname(path)}"（支持 png/jpg/jpeg/webp/gif/bmp 与 mp4/webm/ogv/mov/m4v）`);
@@ -3731,6 +3923,16 @@ ${log.join("\n")}` : "",
           const isVideo = mediaType.startsWith("video/");
           const cap = isVideo ? cfg.showMediaMaxVideoBytes : cfg.showMediaMaxImageBytes;
           const embedCap = isVideo ? cfg.showMediaMaxVideoEmbedBytes : cfg.showMediaMaxImageEmbedBytes;
+          let st = null;
+          try {
+            st = statSync(path);
+          } catch {
+            st = null;
+          }
+          if (!st || !st.isFile()) throw new Error(`companion_show_media: 读不到文件 "${path}"`);
+          if (st.size > cap) {
+            throw new Error(`companion_show_media: ${path} (${st.size} 字节) 超过读取上限 ${cap} 字节`);
+          }
           const data = await readFile2(path);
           if (data.byteLength > cap) {
             throw new Error(`companion_show_media: ${path} (${data.byteLength} 字节) 超过读取上限 ${cap} 字节`);

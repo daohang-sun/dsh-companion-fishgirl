@@ -17,7 +17,7 @@ import { createServer } from 'node:http'
 import { readFile, writeFile, readdir, stat } from 'node:fs/promises'
 import { existsSync } from 'node:fs'
 import { join, resolve, extname, basename, sep } from 'node:path'
-import { randomBytes, createHash } from 'node:crypto'
+import { randomBytes, createHash, timingSafeEqual } from 'node:crypto'
 import { dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { downscalePng, pngSize } from './tex-downscale.mjs'
@@ -221,6 +221,8 @@ export function createPetServer(opts = {}) {
       'content-type': type,
       'cache-control': 'no-store',
       'access-control-allow-origin': 'http://127.0.0.1:' + port,
+      // 静态资源不嗅探类型，避免被当脚本执行。
+      'x-content-type-options': 'nosniff',
     })
     res.end(typeof obj === 'string' || Buffer.isBuffer(obj) ? obj : JSON.stringify(obj))
   }
@@ -235,12 +237,30 @@ export function createPetServer(opts = {}) {
   })
   const authorized = (req) => {
     const h = req.headers.authorization || ''
-    return h === 'Bearer ' + token || h === token || req.url.includes('token=' + token)
+    // 定长比较，避免逐字符早退带来的时序侧信道。
+    const safeEqual = (a, b) => {
+      const ba = Buffer.from(String(a), 'utf8')
+      const bb = Buffer.from(String(b), 'utf8')
+      if (ba.length !== bb.length) return false
+      try { return timingSafeEqual(ba, bb) } catch { return false }
+    }
+    if (safeEqual(h, 'Bearer ' + token) || safeEqual(h, token)) return true
+    // 兼容启动器把 token 放在查询串里的用法（Electron 首屏 / 命令行自检），
+    // 但必须是「参数名=完整 token」的精确匹配，而不是子串包含。
+    try {
+      const q = new URL(req.url, 'http://127.0.0.1').searchParams.get('token')
+      if (q && safeEqual(q, token)) return true
+    } catch { /* URL 不合法时按未授权处理 */ }
+    return false
   }
   const crossSite = (req) => {
+    // Host 必须是本机回环：挡住 DNS rebinding（恶意域名解析到 127.0.0.1）。
+    const host = String(req.headers.host || '')
+    const allowed = new Set(['127.0.0.1:' + port, 'localhost:' + port])
+    if (host && !allowed.has(host.toLowerCase())) return true
     const origin = req.headers.origin
     if (!origin) return false
-    try { return new URL(origin).host !== '127.0.0.1:' + port } catch { return true }
+    try { return !allowed.has(new URL(origin).host.toLowerCase()) } catch { return true }
   }
 
   async function enqueue(type, payload = {}) {
@@ -275,8 +295,13 @@ export function createPetServer(opts = {}) {
     }
     if (path === '/api/selftest' && req.method === 'POST') {
       const body = await readBody(req)
-      await writeFile(join(__dirname, 'selftest-result.json'), JSON.stringify(body, null, 2))
-      return send(res, 200, { ok: true })
+      // 诊断落盘失败不应让接口 500 崩掉诊断流程；写不出去就如实回报。
+      try {
+        await writeFile(join(__dirname, 'selftest-result.json'), JSON.stringify(body ?? {}, null, 2))
+        return send(res, 200, { ok: true })
+      } catch (err) {
+        return send(res, 200, { ok: false, error: String(err?.message || err) })
+      }
     }
     if (path === '/api/capture' && req.method === 'POST') {
       const body = await readBody(req)
@@ -284,8 +309,12 @@ export function createPetServer(opts = {}) {
       const m = data.match(/^data:image\/(png|jpeg);base64,(.+)$/)
       if (m) {
         const { writeFile } = await import('node:fs/promises')
-        await writeFile(join(__dirname, 'capture.jpg'), Buffer.from(m[2], 'base64'))
-        if (body?.probe) await writeFile(join(__dirname, 'capture-probe.json'), JSON.stringify(body.probe, null, 2))
+        try {
+          await writeFile(join(__dirname, 'capture.jpg'), Buffer.from(m[2], 'base64'))
+          if (body?.probe) await writeFile(join(__dirname, 'capture-probe.json'), JSON.stringify(body.probe, null, 2))
+        } catch (err) {
+          return send(res, 200, { ok: false, error: String(err?.message || err) })
+        }
       }
       return send(res, 200, { ok: !!m })
     }
@@ -411,6 +440,9 @@ export function createPetServer(opts = {}) {
   }
 
   async function handleStatic(req, res, url) {
+    // 静态资源也要过跨站/Host 校验：否则恶意网页可以把域名解析到 127.0.0.1
+    // 后读取本机模型、贴图与 runtime manifest（DNS rebinding）。
+    if (crossSite(req)) return send(res, 403, { error: 'cross-origin denied' })
     let rel = url.pathname
     // Node 的 URL.pathname 保留 percent-encoding；这里只解一次，交给 safeBase 防穿越。
     try { rel = decodeURIComponent(rel) } catch {}
@@ -477,6 +509,8 @@ export function createPetServer(opts = {}) {
       return { server, url, token, apiPath }
     },
     async close() {
+      // keep-alive 连接会让 server.close() 一直挂着，必须强制断开。
+      try { server?.closeAllConnections?.() } catch { /* 忽略 */ }
       if (server) await new Promise(ok => server.close(ok))
       server = null
     },

@@ -19,6 +19,8 @@ import { homedir } from 'node:os'
 import { isAbsolute, join } from 'node:path'
 
 const DEFAULT_DIRS = ['大肥鱼插件', 'deepfish-desktop-pet', 'DeepFish-desktop-pet', 'WHALEL2D']
+/** 桌宠响应体上限（2 MiB），防止异常/被篡改的本地服务把宿主内存撑爆。 */
+const MAX_PET_RESPONSE_BYTES = 2 * 1024 * 1024
 
 function userHome() {
   return typeof process !== 'undefined' && process.env?.USERPROFILE
@@ -52,6 +54,25 @@ export function resolveApiPath(configured, extraDirs = []) {
   return out
 }
 
+/**
+ * 只允许本机回环地址。
+ *
+ * api.json 里的 url 是用户自己写的，但 api.json 可能被替换、也可能被恶意网页
+ * 通过设置端点指向别处（见 src/index.ts 的 petApiPath 处理）。如果不校验，
+ * 宿主会带着 Bearer token 向任意主机发请求（SSRF + 凭据外泄）。桌宠本来就是
+ * 本机进程，所以这里只接受回环地址。
+ */
+export function isLoopbackUrl(raw) {
+  if (typeof raw !== 'string' || !raw.trim()) return false
+  try {
+    const u = new URL(raw.trim())
+    if (u.protocol !== 'http:' && u.protocol !== 'https:') return false
+    const host = u.hostname.toLowerCase().replace(/^\[/, '').replace(/\]$/, '')
+    if (host === 'localhost' || host === '::1' || host === '0:0:0:0:0:0:0:1') return true
+    return /^127\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(host)
+  } catch { return false }
+}
+
 /** 读取 api.json → { baseUrl, token, path, version } 或 null。 */
 export async function readPetApi(configured, extraDirs = []) {
   const candidates = resolveApiPath(configured, extraDirs)
@@ -61,7 +82,8 @@ export async function readPetApi(configured, extraDirs = []) {
       const api = JSON.parse(await readFile(path, 'utf8'))
       const url = typeof api.url === 'string' ? api.url.trim().replace(/\/+$/, '') : ''
       const token = typeof api.token === 'string' ? api.token.trim() : ''
-      if (url && token) return { baseUrl: url, token, path, version: api.version || 1 }
+      // 只接受本机回环地址：否则 token 会随请求发到第三方主机。
+      if (url && token && isLoopbackUrl(url)) return { baseUrl: url, token, path, version: api.version || 1 }
     } catch { /* 继续找下一个位置 */ }
   }
   return null
@@ -78,6 +100,8 @@ export function petUnavailableError() {
 
 /** 调用桌宠本机接口（所有请求从宿主发出，token 不进浏览器）。 */
 export async function callPet(api, route, body, timeoutMs = 15000, method = 'POST') {
+  // 二次校验：即使 api 对象来自旧缓存或被篡改，也不把 token 发往非回环地址。
+  if (!api || !isLoopbackUrl(api.baseUrl)) throw new Error('桌宠地址不是本机回环地址，已拒绝发送 token')
   const controller = typeof AbortController !== 'undefined' ? new AbortController() : null
   const timer = controller ? setTimeout(() => controller.abort(), timeoutMs) : null
   try {
@@ -88,7 +112,11 @@ export async function callPet(api, route, body, timeoutMs = 15000, method = 'POS
     }
     if (method !== 'GET' && body !== undefined && body !== null) init.body = JSON.stringify(body)
     const res = await fetch(api.baseUrl + route, init)
+    // 限制响应体：被篡改/异常的服务端不能靠超大响应撑爆宿主内存。
+    const declared = Number(res.headers?.get?.('content-length') || 0)
+    if (declared > MAX_PET_RESPONSE_BYTES) throw new Error('桌宠响应过大')
     const text = await res.text()
+    if (text.length > MAX_PET_RESPONSE_BYTES) throw new Error('桌宠响应过大')
     let data
     try { data = JSON.parse(text) } catch { data = { raw: text.slice(0, 2000) } }
     if (!res.ok) throw new Error((data && (data.error || data.message)) || ('HTTP ' + res.status))

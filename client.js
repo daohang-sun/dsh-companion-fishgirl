@@ -189,7 +189,7 @@ window.__ModuleLoader__.load({
     const LABELED = [...OPTIONS, HINT]
 
     // ── 配置卡 ──────────────────────────────────────────────────────────────
-    // 三个开关在设置卡里直接点，读写走 webServer 路由存 settings.json。
+    // 开关在设置卡里直接点，读写走 webServer 路由存 settings.json。
     // key 必须是 npm 包名（插件管理页按 pkg.name 匹配 entryKey）。
     const BUNDLE_KEY = 'dsh-companion-fishgirl'
     const SETTINGS_PATH = '/api/companion-fishgirl/settings'
@@ -207,6 +207,7 @@ window.__ModuleLoader__.load({
       '.cfgs-knob{display:block;width:16px;height:16px;margin:0 3px;border-radius:50%;background:#fff;',
       'box-shadow:0 1px 2px rgba(0,0,0,.25);transition:transform .15s}',
       '.cfgs-switch[data-on="true"] .cfgs-knob{transform:translateX(16px)}',
+      '.cfgs-group{font-size:11px;font-weight:700;letter-spacing:.04em;color:var(--dsw-alias-accent-primary,#3b82f6);padding:16px 0 2px;text-transform:uppercase}',
     ].join('')
     function ensureCfgStyle() {
       if (typeof document === 'undefined' || !document.getElementById) return
@@ -262,6 +263,7 @@ window.__ModuleLoader__.load({
       { id: 'tiered', label: '分层档 · L1/L2/L3' },
     ]
     const readOpts = (d) => ({
+      promptModulesEnabled: d.promptModulesEnabled === true,
       personaEnabled: d.personaEnabled !== false,
       globalCompanionMode: d.globalCompanionMode === true,
       relaxedMode: d.relaxedMode === true,
@@ -305,13 +307,18 @@ window.__ModuleLoader__.load({
         }, h('span', { className: 'cfgs-knob' })))
       const selectStyle = { background: 'transparent', color: 'inherit', border: 'none',
         fontSize: '12px', padding: '4px 6px', cursor: 'pointer', maxWidth: '190px' }
+      const Group = (label) => h('div', { className: 'cfgs-group' }, label)
       return h('div', null,
+        Row('promptModulesEnabled', '设定词 / 指令词注入（默认关）',
+          '关闭后角色设定、养成数值、情绪/念头/恋人/自我评估与行为指令都不进提示词，只留身份与跨窗口记忆事实，给模型更高自由度。'),
+        Group('角色与养成 · 需先开启上方总开关'),
         Row('personaEnabled', '人格养成属性注入',
           '关闭后养成数值不进提示词，/fish 养成面板一并隐藏。'),
         Row('globalCompanionMode', '全局大肥鱼模式',
           '让所有模式都启用大肥鱼。'),
         Row('relaxedMode', '自然相处',
           '省去叮嘱，自然相处。'),
+        Group('记忆与小窝'),
         h('div', { className: 'cfgs-row' },
           h('div', { className: 'cfgs-label' },
             h('span', { className: 'cfgs-title' }, '记忆类型'),
@@ -324,6 +331,7 @@ window.__ModuleLoader__.load({
           '侧栏里的小窝面板：生活数值、种田、画册、记忆星图。'),
         Row('curateOnClose', '会话整理',
           '窗口关闭后，下扇窗口打开时让大肥鱼自己挑选值得长期记住的内容。'),
+        Group('桌面形象'),
         Row('petBridgeEnabled', 'Live2D 桌宠桥接',
           '连接本机 pet/ 桌宠进程；开启后侧栏「鱼鱼小窝 → Live2D 桌宠」可联动表情/动作，大肥鱼也能用工具驱动它。需先启动桌宠。'),
         err ? h('div', { className: 'cfgs-err', role: 'alert' }, '保存失败：' + err) : null)

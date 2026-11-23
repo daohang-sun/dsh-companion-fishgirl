@@ -55,9 +55,15 @@
         # 情绪暗涌/自我认知等）也会从每轮提示词里真正裁掉——文字不进提示词，
         # token 真省。只保留一句身份锚点 + 跨窗口记忆 + 安全底线，状态仍在
         # 后台照常累积、/fish 面板可查。
-        # 下面三个开关默认值；实际值以 ~/.dsh/companion-fishgirl/settings.json
+        # 下面各开关默认值；实际值以 ~/.dsh/companion-fishgirl/settings.json
         # 里的用户改动为准（设置 → 插件 → dsh-companion-fishgirl 配置卡里点开关
         # 即时写入，优先级高于这里）。改完下一轮装配即生效，无需重启。
+        # v0.23.0 设定词/指令词注入总开关：默认 false（给 DeepSeek 更高自由度）。
+        # 关闭后角色设定、养成数值、情绪/念头/恋人/自我评估与行为指令段落
+        # 都不进提示词，只留一句身份锚点 + 跨窗口记忆事实 + 安全底线；
+        # 状态照常累积、工具照常可用。开启后才由下面的 personaEnabled /
+        # relaxedMode 及各功能开关细分哪些模块注入。
+        promptModulesEnabled: false
         personaEnabled: true
         # v0.11.0 全局大肥鱼模式：默认 false（严格只在大肥鱼 preset 生效）。
         # 改为 true 后标准/创造等所有模式的会话都会注入大肥鱼人设、开放陪伴
