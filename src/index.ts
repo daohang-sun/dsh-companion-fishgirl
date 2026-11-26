@@ -30,7 +30,9 @@ import { blankHome, normalizeHome, tickHome, homeAction, homeSnapshot,
   cropById, recipeById, CROPS, RECIPES, ACTIVITIES, PALETTES } from './home'
 import { normalizeMode, appendStream, searchStream, traceStream, blankTiers, normalizeTiers,
   distillTier, archiveTier, buildStarmap, layoutStarmap, MODE_LABELS } from './memory-modes'
-import { readPetApi, petUnavailableError, callPet, petText, isRichPet } from './pet-bridge'
+import { readPetApi, resolvePetDir, petUnavailableError, callPet, petText, isRichPet } from './pet-bridge'
+import { spawn } from 'node:child_process'
+import { resolve } from 'node:path'
 
 // 最近一份「共享临场意图」（表情 + 动作 + 短气泡），插件进程内共享，带过期时间。
 // 桌宠进程维护自己的副本（pet/server.mjs 的 state.lastPresence）；这里是插件侧镜像，
@@ -608,6 +610,7 @@ class Companion extends Service {
       // v0.20.0 Live2D 桌宠桥接：默认关（桌面端需用户自行安装桌宠/放模型）。
       petBridgeEnabled: config.petBridgeEnabled ?? false,
       petApiPath: typeof config.petApiPath === 'string' ? config.petApiPath : '',
+      petDir: typeof config.petDir === 'string' ? config.petDir : '',
     }
     // Cordis fiber only calls [Service.init] for CLASS-style plugins (where the
     // plugin itself is the exported constructor). This bundle is a functional
@@ -1951,6 +1954,29 @@ export function apply(ctx, config = {}) {
     // v0.20.0 Live2D 桌宠桥接
     petBridgeEnabled: config.petBridgeEnabled === true,
     petApiPath: typeof config.petApiPath === 'string' ? config.petApiPath : '',
+    petDir: typeof config.petDir === 'string' ? config.petDir : '',
+  }
+  // v0.24.0 一键启动桌宠：只执行白名单脚本，目录来自已配置/已发现的桌宠目录。
+  const PET_LAUNCH_SCRIPTS = new Set(['launch.mjs', 'server-only.mjs'])
+  const launchPetProcess = async (mode = 'app') => {
+    const scriptName = mode === 'server' ? 'server-only.mjs' : 'launch.mjs'
+    if (!PET_LAUNCH_SCRIPTS.has(scriptName)) throw new Error('不支持的启动方式')
+    const dir = resolvePetDir(runtimeOpts.petDir, runtimeOpts.petApiPath,
+      [join(PLUGIN_DIR, '..', 'pet'), join(PLUGIN_DIR, 'pet')])
+    if (!dir) throw new Error('没找到桌宠目录。请在设置里填写桌宠目录（含 launch.mjs）。')
+    const script = resolve(dir, scriptName)
+    // Windows 上 resolve 返回反斜杠，配置可能是正斜杠；两侧都用 resolve 规范化再比较。
+    const normDir = resolve(dir)
+    if (!script.startsWith(normDir) || !existsSync(script)) throw new Error('桌宠目录里没有 ' + scriptName)
+    const env = { ...process.env }
+    for (const k of Object.keys(env)) {
+      const lk = k.toLowerCase()
+      if (lk === 'node_options' || lk === 'node_extra_ca_certs' || lk.includes('experimental') || lk === 'electron_run_as_node') delete env[k]
+    }
+    const child = spawn(process.execPath, [script], { cwd: dir, env, detached: true, stdio: 'ignore', windowsHide: false })
+    child.unref()
+    child.on('error', (err) => ctx.logger.warn(`companion: pet launch failed: ${String(err)}`))
+    return { dir, mode, message: '桌宠正在启动，稍等几秒后会自动连上。' }
   }
   // 记忆模式变了要同步到 service（service 的 getMemoryMode 从这里读）。
   const syncMemoryMode = () => { companion.cfg.memoryMode = runtimeOpts.memoryMode }
@@ -2372,6 +2398,7 @@ export function apply(ctx, config = {}) {
     curateOnClose: runtimeOpts.curateOnClose,
     petBridgeEnabled: runtimeOpts.petBridgeEnabled,
     petApiPath: runtimeOpts.petApiPath,
+    petDir: runtimeOpts.petDir,
   })
   const applySettings = (next) => {
     if (typeof next.promptModulesEnabled === 'boolean') runtimeOpts.promptModulesEnabled = next.promptModulesEnabled
@@ -2383,6 +2410,7 @@ export function apply(ctx, config = {}) {
     if (typeof next.curateOnClose === 'boolean') runtimeOpts.curateOnClose = next.curateOnClose
     if (typeof next.petBridgeEnabled === 'boolean') runtimeOpts.petBridgeEnabled = next.petBridgeEnabled
     if (typeof next.petApiPath === 'string') runtimeOpts.petApiPath = next.petApiPath
+    if (typeof next.petDir === 'string') runtimeOpts.petDir = next.petDir
     // 人格/自然模式开关变了要重算注入段；下一轮 prompt 装配就会用新值。
     void refreshSummary().catch(() => {})
   }
@@ -2435,6 +2463,7 @@ export function apply(ctx, config = {}) {
               .some(k => typeof body[k] === 'boolean')
               || (typeof body.memoryMode === 'string' && ['summary', 'stream', 'tiered'].includes(body.memoryMode))
               || (typeof body.petApiPath === 'string')
+              || (typeof body.petDir === 'string')
             if (!known) { send(response, 400, { ok: false, error: '缺少合法的开关值' }); return }
             // petApiPath 必须是本机真实存在的文件（不能是目录/不存在路径），
             // 避免把读取目标指向奇怪位置；真正的地址校验在 readPetApi（只收回环）。
@@ -2558,6 +2587,26 @@ export function apply(ctx, config = {}) {
           reply(200, { ok: true, presence: p })
           return
         }
+        // v0.24.0 一键启动：从 DSH 面板直接拉起本机桌宠进程。
+        // 安全边界：只执行固定白名单脚本（launch.mjs / server-only.mjs），
+        // 目录必须来自已配置/已发现的桌宠目录，绝不接受浏览器传来的任意命令或路径。
+        if (request.method === 'POST') {
+          const launchBody = await readJson2(request)
+          if (launchBody && launchBody.action === 'launch') {
+            try {
+              // 已经在跑就不再重复拉起。
+              const running = await readPetApi(runtimeOpts.petApiPath, [join(PLUGIN_DIR, '..', 'pet'), join(PLUGIN_DIR, 'pet')])
+              if (running) {
+                try { await callPet(running, '/api/state', {}, 3000, 'GET'); reply(200, { ok: true, started: false, alreadyRunning: true, message: '桌宠已在运行。' }); return } catch { /* 旧 api.json，继续启动 */ }
+              }
+              const launched = await launchPetProcess(launchBody.mode === 'server' ? 'server' : 'app')
+              reply(200, { ok: true, started: true, ...launched })
+            } catch (err) { reply(500, { ok: false, error: String(err && err.message || err) }) }
+            return
+          }
+          // 其余 action 需要桥接开启；body 已在上面读过，后面直接复用。
+          request.__companionBody = launchBody
+        }
         if (!runtimeOpts.petBridgeEnabled) { reply(200, { ok: true, enabled: false, connected: false }); return }
         // 优先找插件自带桌宠目录里的 api.json（相对 dist 的上级 pet/）
         let api = await readPetApi(runtimeOpts.petApiPath, [join(PLUGIN_DIR, '..', 'pet'), join(PLUGIN_DIR, 'pet')])
@@ -2591,7 +2640,7 @@ export function apply(ctx, config = {}) {
         }
 
         if (request.method === 'POST') {
-          const body = await readJson2(request)
+          const body = request.__companionBody || await readJson2(request)
           if (!body || typeof body.action !== 'string') { reply(400, { ok: false, error: '缺少 action' }); return }
           const action = body.action
           try {
@@ -2748,20 +2797,20 @@ export function apply(ctx, config = {}) {
   if (cfg.homeEnabled !== false) {
     ctx.tools.register(defineTool({
       name: 'companion_home',
-      description: '照看大肥鱼的鱼鱼小窝：她自己在屋里过日子（做饭/洗澡/看书/画画/种菜/看星星…），你也能安排她做一件事。用 op=status 看她此刻在做什么、生活流、金币与菜畦；op=act 让她去做某事（activity 见 status 返回的列表）；op=paint 让她画一张画挂进画册；op=autonomy 开关她的自主生活。所有窗口共享同一个小窝。',
+      description: '照看大肥鱼的鱼鱼小窝：她自己在屋里过日子，你也能安排她做一件事。用 op=status 看状态；op=act 让她去做某事；op=paint 让她画一张画挂进画册；op=diary 由她自己写下一篇日记；op=autonomy 开关她的自主生活。画什么、怎么写都由她自己决定。所有窗口共享同一个小窝。',
       parameters: {
-        op: { type: 'string', description: '操作：status / act / paint / autonomy / buy / plant / water / harvest / replant / sell / cook / pet / talk / sleep / wake / clean / weather / gallery' },
-        activity: { type: 'string', description: 'act 用：要她做的事（cook/eat/bath/read/draw/garden/harvest/stargaze/window/music/sofa/tidy/swim/nap/write/tea/sleep）' },
-        note: { type: 'string', description: 'act 用：可选的此刻心情/动作描述（≤60 字），会显示在她头顶的气泡里' },
-        title: { type: 'string', description: 'paint 用：这幅画的名字（不给就自己起）' },
-        palette: { type: 'string', description: 'paint 用配色：sea/sunset/night/mint/rose/amber' },
+        op: { type: 'string', description: '操作：status / act / paint / diary / autonomy / weather / gallery（其他操作兼容旧调用）' },
+        activity: { type: 'string', description: 'act 用：要她做的事' },
+        note: { type: 'string', description: 'act 用：此刻的心情或动作描述' },
+        title: { type: 'string', description: 'paint 用：画名，可留空' },
+        palette: { type: 'string', description: 'paint 用：配色倾向，可留空；任何文字都可以' },
         weather: { type: 'string', description: 'weather 用：sunny / rain / snow' },
         on: { type: 'boolean', description: 'autonomy 用：true 开、false 关' },
-        crop: { type: 'string', description: '作物 id（buy/plant/sell 用，见 status 返回的作物表）' },
-        slot: { type: 'number', description: '菜畦编号 0-8（plant/water/harvest 用）' },
-        n: { type: 'number', description: '数量（buy/sell 用）' },
-        recipe: { type: 'string', description: '菜谱 id（cook 用）' },
-        text: { type: 'string', description: '跟它说话的内容（talk 用）' },
+        crop: { type: 'string', description: '作物 id（兼容旧调用）' },
+        slot: { type: 'number', description: '菜畦编号（兼容旧调用）' },
+        n: { type: 'number', description: '数量（兼容旧调用）' },
+        recipe: { type: 'string', description: '菜谱 id（兼容旧调用）' },
+        text: { type: 'string', description: 'diary 用：她写下的日记内容；talk 用：跟她说的话' },
       },
       output: textOutput,
       async execute(args) {
@@ -2779,14 +2828,10 @@ export function apply(ctx, config = {}) {
             a ? `她此刻：${a.verb}（${a.line}），已进行 ${Math.round(a.elapsedMs / 60000)} 分钟` : '她此刻：待着',
             `心情 ${snap.vitals.mood} · 精神 ${snap.vitals.spirit} · 饱腹 ${snap.vitals.fullness}`,
             `清爽 ${snap.vitals.cleanliness} · 陪伴 ${snap.vitals.companionship} · 好奇 ${snap.vitals.curiosity}`,
-            `金币 ${snap.coins} · 已成熟 ${snap.readyCount} 块地 · 画册 ${snap.galleryCount} 张`,
-            `背包：${Object.keys(snap.bag).length ? Object.entries(snap.bag).map(([k, v]) => `${cropById(k)?.name ?? k}×${v}`).join('、') : '（空）'}`,
+            `金币 ${snap.coins} · 画册 ${snap.galleryCount} 张 · 日记 ${snap.diaryCount} 篇`,
             snap.sleeping ? '她睡着了。' : '',
             log.length ? `最近的生活：\n${log.join('\n')}` : '',
             '能做：' + ACTIVITIES.filter(x => x.id !== 'sleep').map(x => `${x.id}=${x.name}`).join('、'),
-            '作物：' + CROPS.map(c => `${c.id}=${c.name}(${c.tier},种${c.seed}/卖${c.sell})`).join('；'),
-            '菜谱：' + RECIPES.map(r => `${r.id}=${r.name}`).join('；'),
-            '画作配色：' + Object.keys(PALETTES).map(k => `${k}=${PALETTES[k].name}`).join('、'),
           ].filter(Boolean).join('\n') }
         }
         return { text: result.message + (result.ok ? `\n（当前金币 ${(await companion.snapshotHome(toolUid())).coins}）` : '') }
@@ -2973,9 +3018,9 @@ export function apply(ctx, config = {}) {
     }
     ctx.tools.register(defineTool({
       name: 'companion_pet',
-      description: '操作你的 Live2D 桌宠（桌面上的大肥鱼形象）：让它做出表情、动作、说话，或收起/显示。op=presence 可下发一份「临场意图」（表情+动作+短气泡同时作用于桌宠和面板里的像素小屋/院子，让两种形象表现同一状态）；op=list 先看可用的表情与动作名；op=status 查当前状态。表情/动作用中文名（如 脸红/爱心眼/流泪、IDLE/默认手切举手）。仅大肥鱼模式可用。',
+      description: '操作你的 Live2D 桌宠（桌面上的大肥鱼形象）：让它做出表情、动作、说话，或收起/显示。op=launch 可从 DSH 直接启动本机桌宠；op=presence 可下发一份「临场意图」（表情+动作+短气泡同时作用于桌宠，让两种形象表现同一状态）；op=list 先看可用的表情与动作名；op=status 查当前状态。表情/动作用中文名（如 脸红/爱心眼/流泪、IDLE/默认手切举手）。仅大肥鱼模式可用。',
       parameters: {
-        op: { type: 'string', description: '操作：list|status|say|presence|expression|motion|show|hide|focus' },
+        op: { type: 'string', description: '操作：launch|list|status|say|presence|expression|motion|show|hide|focus' },
         text: { type: 'string', description: 'say / presence 时她说的话（短气泡）' },
         name: { type: 'string', description: 'expression/motion 的名字（list 返回的 name）' },
         expression: { type: 'string', description: 'presence 时的表情名' },
@@ -2983,9 +3028,15 @@ export function apply(ctx, config = {}) {
       },
       output: textOutput,
       async execute(args) {
-        const api = await petApi()
-        if (!api) return { text: 'Live2D 桌宠桥接未启用（或桌宠未启动）。请在设置卡开启桌宠桥接，并打开 pet/start.cmd。' }
         const op = typeof args.op === 'string' ? args.op : 'status'
+        if (op === 'launch') {
+          try {
+            const r = await launchPetProcess(args.mode === 'server' ? 'server' : 'app')
+            return { text: `已从 DSH 启动桌宠（${r.dir}）。${r.message} 若桥接未开，先说一声我来开启。` }
+          } catch (err) { return { text: '启动桌宠失败：' + String(err && err.message || err) } }
+        }
+        const api = await petApi()
+        if (!api) return { text: 'Live2D 桌宠桥接未启用（或桌宠未启动）。说「开启桌宠桥接」或到设置卡打开它，也可以在面板点「一键启动桌宠」。' }
         try {
           if (op === 'status') {
             const r = await callPet(api, '/api/state', {}, 5000, 'GET')

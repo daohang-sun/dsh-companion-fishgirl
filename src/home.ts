@@ -120,6 +120,7 @@ export function blankHome(now = Date.now()) {
     activity: null,
     lifeLog: [],
     gallery: [],
+    diary: [],
     autonomy: true,
     weather: 'sunny',
     lastTickAt: now,
@@ -159,6 +160,15 @@ export function normalizeHome(raw, now = Date.now()) {
   const gallery = Array.isArray(raw.gallery) ? raw.gallery.filter(p => p && typeof p.seed === 'number').slice(-30) : []
   const lifeLog = Array.isArray(raw.lifeLog)
     ? raw.lifeLog.filter(e => e && typeof e.text === 'string').slice(-80) : []
+  const diary = Array.isArray(raw.diary)
+    ? raw.diary.filter(d => d && typeof d.text === 'string' && d.text.trim()).slice(-60).map(d => ({
+        id: typeof d.id === 'string' && d.id ? d.id : `d${Number(d.at) || 0}`,
+        at: Number(d.at) || now,
+        date: typeof d.date === 'string' && d.date ? d.date : new Date(Number(d.at) || now).toLocaleDateString('sv-SE'),
+        text: String(d.text).slice(0, 1200),
+        by: ['self', 'model'].includes(d.by) ? d.by : 'model',
+      }))
+    : []
   return {
     version: HOME_VERSION,
     seedKey: typeof raw.seedKey === 'string' && raw.seedKey ? raw.seedKey : base.seedKey,
@@ -171,6 +181,7 @@ export function normalizeHome(raw, now = Date.now()) {
     activity: normalizeActivity(raw.activity, now),
     lifeLog,
     gallery,
+    diary,
     autonomy: raw.autonomy !== false,
     weather: ['sunny', 'rain', 'snow'].includes(raw.weather) ? raw.weather : 'sunny',
     lastTickAt: Number(raw.lastTickAt) || now,
@@ -323,16 +334,24 @@ function finishActivity(h, at) {
   h.activity = null
 }
 
-/** 画作：只存 seed + 标题 + 配色名，前端用同一 seed 渲染出确定的抽象画。 */
+/** 画作：只存 seed + 标题 + 配色名，前端用同一 seed 渲染出确定的抽象画。
+ *  配色不再是枚举约束：任意文本都会被接受，未知名字在前端按字串散列出独特色板。 */
 export function makePainting(seed, title, at = Date.now(), by = 'self', paletteId) {
   const keys = Object.keys(PALETTES)
-  const pid = paletteId && PALETTES[paletteId] ? paletteId : keys[seed % keys.length]
-  const names = ['潮水线', '今天的云', '窗台上的光', '一尾小鱼', '没画完的海', '十七颗星', '风从左边来', '小小的房间']
+  const pid = (typeof paletteId === 'string' && paletteId.trim())
+    ? paletteId.trim().slice(0, 24)
+    : keys[seed % keys.length]
+  const names = [
+    '潮水线', '今天的云', '窗台上的光', '一尾小鱼', '没画完的海', '十七颗星', '风从左边来', '小小的房间',
+    '午后的第三个哈欠', '玻璃上的雨', '说了一半的话', '盆栽又长高了', '从楼下传来的歌', '把星星数错了',
+    '一条会飞的鱼', '今天的风往哪吹', '杯子里的月亮', '枕头上的阳光', '没关的收音机', '第七种蓝',
+    '路过的一整片海', '灯亮起来的那一刻', '鱼尾巴扫过的水草', '发呆的时候', '写给明天的涂鸦',
+  ]
   const auto = names[seed % names.length]
   return {
-    id: `p${seed}`,
+    id: `p${seed}-${at}`,
     seed,
-    title: (typeof title === 'string' && title.trim() ? title.trim() : auto).slice(0, 24),
+    title: (typeof title === 'string' && title.trim() ? title.trim() : auto).slice(0, 36),
     palette: pid,
     at,
     by: ['self', 'user', 'model'].includes(by) ? by : 'self',
@@ -363,7 +382,7 @@ export function homeAction(home, op, args = {}, now = Date.now()) {
   const done = (message) => ({ ok: true, home: h, message })
 
   // 睡着时只允许叫醒 / 查看 / 改开关（模型不该在别人睡着时安排她干活）。
-  if (h.sleeping && !['wake', 'status', 'autonomy', 'weather', 'gallery'].includes(op)) {
+  if (h.sleeping && !['wake', 'status', 'autonomy', 'weather', 'gallery', 'diary'].includes(op)) {
     return fail('它正睡着呢，先叫醒它吧。')
   }
 
@@ -410,7 +429,25 @@ export function homeAction(home, op, args = {}, now = Date.now()) {
       pushLog(h, `p${now}`, now, `她画完了《${painting.title}》`, 'draw')
       h.vitals.mood = clamp(h.vitals.mood + 5)
       h.vitals.curiosity = clamp(h.vitals.curiosity + 6)
-      return done(`画完了《${painting.title}》（${PALETTES[painting.palette].name}），已经挂进画册。`)
+      return done(`画完了《${painting.title}》（${PALETTES[painting.palette]?.name || painting.palette}），已经挂进画册。`)
+    }
+
+    case 'diary': {
+      // 内容由模型自己写进来；这里不做主题/字数/语气引导，只做长度与存储上限。
+      const text = typeof args.text === 'string' ? args.text.trim() : ''
+      if (!text) return done(h.diary.length ? `日记里有 ${h.diary.length} 篇。` : '日记还是空的。')
+      const at = now
+      const entry = {
+        id: `d${at}-${Math.random().toString(36).slice(2, 6)}`,
+        at,
+        date: new Date(at).toLocaleDateString('sv-SE'),
+        text: text.slice(0, 1200),
+        by: args.by === 'self' ? 'self' : 'model',
+      }
+      h.diary.push(entry)
+      if (h.diary.length > 60) h.diary = h.diary.slice(-60)
+      pushLog(h, `diary${at}`, at, '写了一篇日记', 'write')
+      return done(`写下了日记（${entry.date}）。`)
     }
 
     case 'autonomy': {
@@ -615,6 +652,8 @@ export function homeSnapshot(home, now = Date.now()) {
     lifeLog: h.lifeLog.slice(-12),
     gallery: h.gallery.slice(-6),
     galleryCount: h.gallery.length,
+    diary: h.diary.slice(-30),
+    diaryCount: h.diary.length,
     autonomy: h.autonomy,
     weather: h.weather,
     clock: { now, hour: new Date(now).getHours(), minute: new Date(now).getMinutes() },

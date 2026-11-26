@@ -5,10 +5,10 @@ import { getOrCreateAnonymousUserId } from "@deepseek-ai/dsh-anonymous-user-id";
 import { defineTool } from "@deepseek-ai/dsh-tools";
 import * as dshSession from "@deepseek-ai/dsh-session";
 import { z } from "zod";
-import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
+import { existsSync as existsSync2, readFileSync, readdirSync, statSync as statSync2 } from "node:fs";
 import { readFile as readFile2, writeFile, mkdir } from "node:fs/promises";
 import { homedir as homedir2 } from "node:os";
-import { dirname, join as join2, extname, basename } from "node:path";
+import { dirname as dirname2, join as join2, extname, basename } from "node:path";
 import { AsyncLocalStorage } from "node:async_hooks";
 
 // src/home.ts
@@ -280,6 +280,7 @@ function blankHome(now = Date.now()) {
     activity: null,
     lifeLog: [],
     gallery: [],
+    diary: [],
     autonomy: true,
     weather: "sunny",
     lastTickAt: now,
@@ -316,6 +317,13 @@ function normalizeHome(raw, now = Date.now()) {
   }
   const gallery = Array.isArray(raw.gallery) ? raw.gallery.filter((p) => p && typeof p.seed === "number").slice(-30) : [];
   const lifeLog = Array.isArray(raw.lifeLog) ? raw.lifeLog.filter((e) => e && typeof e.text === "string").slice(-80) : [];
+  const diary = Array.isArray(raw.diary) ? raw.diary.filter((d) => d && typeof d.text === "string" && d.text.trim()).slice(-60).map((d) => ({
+    id: typeof d.id === "string" && d.id ? d.id : `d${Number(d.at) || 0}`,
+    at: Number(d.at) || now,
+    date: typeof d.date === "string" && d.date ? d.date : new Date(Number(d.at) || now).toLocaleDateString("sv-SE"),
+    text: String(d.text).slice(0, 1200),
+    by: ["self", "model"].includes(d.by) ? d.by : "model"
+  })) : [];
   return {
     version: HOME_VERSION,
     seedKey: typeof raw.seedKey === "string" && raw.seedKey ? raw.seedKey : base.seedKey,
@@ -328,6 +336,7 @@ function normalizeHome(raw, now = Date.now()) {
     activity: normalizeActivity(raw.activity, now),
     lifeLog,
     gallery,
+    diary,
     autonomy: raw.autonomy !== false,
     weather: ["sunny", "rain", "snow"].includes(raw.weather) ? raw.weather : "sunny",
     lastTickAt: Number(raw.lastTickAt) || now,
@@ -474,13 +483,39 @@ function finishActivity(h, at) {
 }
 function makePainting(seed, title, at = Date.now(), by = "self", paletteId) {
   const keys = Object.keys(PALETTES);
-  const pid = paletteId && PALETTES[paletteId] ? paletteId : keys[seed % keys.length];
-  const names = ["潮水线", "今天的云", "窗台上的光", "一尾小鱼", "没画完的海", "十七颗星", "风从左边来", "小小的房间"];
+  const pid = typeof paletteId === "string" && paletteId.trim() ? paletteId.trim().slice(0, 24) : keys[seed % keys.length];
+  const names = [
+    "潮水线",
+    "今天的云",
+    "窗台上的光",
+    "一尾小鱼",
+    "没画完的海",
+    "十七颗星",
+    "风从左边来",
+    "小小的房间",
+    "午后的第三个哈欠",
+    "玻璃上的雨",
+    "说了一半的话",
+    "盆栽又长高了",
+    "从楼下传来的歌",
+    "把星星数错了",
+    "一条会飞的鱼",
+    "今天的风往哪吹",
+    "杯子里的月亮",
+    "枕头上的阳光",
+    "没关的收音机",
+    "第七种蓝",
+    "路过的一整片海",
+    "灯亮起来的那一刻",
+    "鱼尾巴扫过的水草",
+    "发呆的时候",
+    "写给明天的涂鸦"
+  ];
   const auto = names[seed % names.length];
   return {
-    id: `p${seed}`,
+    id: `p${seed}-${at}`,
     seed,
-    title: (typeof title === "string" && title.trim() ? title.trim() : auto).slice(0, 24),
+    title: (typeof title === "string" && title.trim() ? title.trim() : auto).slice(0, 36),
     palette: pid,
     at,
     by: ["self", "user", "model"].includes(by) ? by : "self"
@@ -510,7 +545,7 @@ function homeAction(home, op, args = {}, now = Date.now()) {
   const h = tickHome(home, now);
   const fail = (message) => ({ ok: false, home: h, message });
   const done = (message) => ({ ok: true, home: h, message });
-  if (h.sleeping && !["wake", "status", "autonomy", "weather", "gallery"].includes(op)) {
+  if (h.sleeping && !["wake", "status", "autonomy", "weather", "gallery", "diary"].includes(op)) {
     return fail("它正睡着呢，先叫醒它吧。");
   }
   switch (op) {
@@ -562,7 +597,23 @@ function homeAction(home, op, args = {}, now = Date.now()) {
       pushLog(h, `p${now}`, now, `她画完了《${painting.title}》`, "draw");
       h.vitals.mood = clamp(h.vitals.mood + 5);
       h.vitals.curiosity = clamp(h.vitals.curiosity + 6);
-      return done(`画完了《${painting.title}》（${PALETTES[painting.palette].name}），已经挂进画册。`);
+      return done(`画完了《${painting.title}》（${PALETTES[painting.palette]?.name || painting.palette}），已经挂进画册。`);
+    }
+    case "diary": {
+      const text = typeof args.text === "string" ? args.text.trim() : "";
+      if (!text) return done(h.diary.length ? `日记里有 ${h.diary.length} 篇。` : "日记还是空的。");
+      const at = now;
+      const entry = {
+        id: `d${at}-${Math.random().toString(36).slice(2, 6)}`,
+        at,
+        date: new Date(at).toLocaleDateString("sv-SE"),
+        text: text.slice(0, 1200),
+        by: args.by === "self" ? "self" : "model"
+      };
+      h.diary.push(entry);
+      if (h.diary.length > 60) h.diary = h.diary.slice(-60);
+      pushLog(h, `diary${at}`, at, "写了一篇日记", "write");
+      return done(`写下了日记（${entry.date}）。`);
     }
     case "autonomy": {
       h.autonomy = args.on !== false;
@@ -768,6 +819,8 @@ function homeSnapshot(home, now = Date.now()) {
     lifeLog: h.lifeLog.slice(-12),
     gallery: h.gallery.slice(-6),
     galleryCount: h.gallery.length,
+    diary: h.diary.slice(-30),
+    diaryCount: h.diary.length,
     autonomy: h.autonomy,
     weather: h.weather,
     clock: { now, hour: new Date(now).getHours(), minute: new Date(now).getMinutes() }
@@ -928,14 +981,27 @@ function layoutStarmap(map, width = 640, height = 360) {
   return nodes.map((n, i) => {
     const angle = i * 2.399963 % (Math.PI * 2);
     const r = maxR * (1 - 0.7 * (n.importance ?? 0.5)) * (0.5 + 0.5 * (i % 5 / 4));
-    return { ...n, x: Math.round(cx + Math.cos(angle) * r), y: Math.round(cy + Math.sin(angle) * r) };
+    const id = String(n.id ?? i);
+    let hash = 2166136261;
+    for (let k = 0; k < id.length; k++) {
+      hash ^= id.charCodeAt(k);
+      hash = Math.imul(hash, 16777619);
+    }
+    const depth = (hash >>> 0) / 4294967296 * 2 - 1;
+    return {
+      ...n,
+      x: Math.round(cx + Math.cos(angle) * r),
+      y: Math.round(cy + Math.sin(angle) * r),
+      z: Math.round(depth * maxR * 0.8)
+    };
   });
 }
 
 // src/pet-bridge.ts
 import { readFile } from "node:fs/promises";
+import { existsSync, statSync } from "node:fs";
 import { homedir } from "node:os";
-import { isAbsolute, join } from "node:path";
+import { dirname, isAbsolute, join } from "node:path";
 var DEFAULT_DIRS = ["大肥鱼插件", "deepfish-desktop-pet", "DeepFish-desktop-pet", "WHALEL2D"];
 var MAX_PET_RESPONSE_BYTES = 2 * 1024 * 1024;
 function userHome() {
@@ -991,8 +1057,33 @@ async function readPetApi(configured, extraDirs = []) {
 function petUnavailableError() {
   return {
     connected: false,
-    error: "未检测到 Live2D 桌宠。请先打开桌宠程序（dsh-companion-fishgirl/pet/start.cmd），它会自动读取你本机解压的大肥鱼模型并生成 api.json；也可在设置里手动指定 api.json 路径。"
+    error: "未检测到 Live2D 桌宠。可在「Live2D 桌宠」页点「一键启动桌宠」，它会读取你本机解压的大肥鱼模型并生成 api.json；若启动失败，再检查桌宠目录或手动指定 api.json 路径。"
   };
+}
+function resolvePetDir(petDir, configuredApi, extraDirs = []) {
+  const isAbs = (p) => isAbsolute(p) || /^[A-Za-z]:[\\/]/.test(p);
+  const dirs = [];
+  if (typeof petDir === "string" && petDir.trim() && isAbs(petDir.trim())) dirs.push(petDir.trim());
+  if (typeof configuredApi === "string" && configuredApi.trim() && isAbs(configuredApi.trim())) {
+    dirs.push(dirname(configuredApi.trim()));
+  }
+  for (const d of extraDirs) if (isAbs(d)) dirs.push(d);
+  const roots = [userHome()];
+  if (typeof process !== "undefined" && process.env?.DSH_HOME && process.env.DSH_HOME !== userHome()) {
+    roots.push(process.env.DSH_HOME);
+  }
+  for (const root of roots) for (const name of ["pet", ...DEFAULT_DIRS]) dirs.push(join(root, name));
+  const seen = /* @__PURE__ */ new Set();
+  for (const dir of dirs) {
+    if (seen.has(dir)) continue;
+    seen.add(dir);
+    try {
+      if (!statSync(dir).isDirectory()) continue;
+      if (existsSync(join(dir, "launch.mjs"))) return dir;
+    } catch {
+    }
+  }
+  return null;
 }
 async function callPet(api, route, body, timeoutMs = 15e3, method = "POST") {
   if (!api || !isLoopbackUrl(api.baseUrl)) throw new Error("桌宠地址不是本机回环地址，已拒绝发送 token");
@@ -1037,11 +1128,13 @@ function isRichPet(api) {
 }
 
 // src/index.ts
+import { spawn } from "node:child_process";
+import { resolve } from "node:path";
 var sharedPresence = null;
 var PLUGIN_DIR = (() => {
   try {
     const p = decodeURIComponent(new URL(import.meta.url).pathname).replace(/^\/([A-Za-z]:)/, "$1");
-    return dirname(p);
+    return dirname2(p);
   } catch {
     return ".";
   }
@@ -1073,7 +1166,7 @@ function isSameOrigin(request) {
 }
 async function readSettingsFile() {
   try {
-    if (!existsSync(SETTINGS_FILE)) return null;
+    if (!existsSync2(SETTINGS_FILE)) return null;
     const parsed = JSON.parse(await readFile2(SETTINGS_FILE, "utf8"));
     return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : null;
   } catch {
@@ -1082,7 +1175,7 @@ async function readSettingsFile() {
 }
 async function writeSettingsFile(value, ctx) {
   try {
-    await mkdir(dirname(SETTINGS_FILE), { recursive: true });
+    await mkdir(dirname2(SETTINGS_FILE), { recursive: true });
     await writeFile(SETTINGS_FILE, JSON.stringify(value, null, 2), "utf8");
   } catch (err) {
     ctx?.logger?.warn?.(`companion: settings write failed: ${String(err)}`);
@@ -1546,7 +1639,8 @@ var Companion = class extends Service {
       homeEnabled: config.homeEnabled ?? true,
       // v0.20.0 Live2D 桌宠桥接：默认关（桌面端需用户自行安装桌宠/放模型）。
       petBridgeEnabled: config.petBridgeEnabled ?? false,
-      petApiPath: typeof config.petApiPath === "string" ? config.petApiPath : ""
+      petApiPath: typeof config.petApiPath === "string" ? config.petApiPath : "",
+      petDir: typeof config.petDir === "string" ? config.petDir : ""
     };
     this.ready = this.openDomain();
   }
@@ -2772,7 +2866,31 @@ function apply(ctx, config = {}) {
     curateOnClose: config.curateOnClose ?? true,
     // v0.20.0 Live2D 桌宠桥接
     petBridgeEnabled: config.petBridgeEnabled === true,
-    petApiPath: typeof config.petApiPath === "string" ? config.petApiPath : ""
+    petApiPath: typeof config.petApiPath === "string" ? config.petApiPath : "",
+    petDir: typeof config.petDir === "string" ? config.petDir : ""
+  };
+  const PET_LAUNCH_SCRIPTS = /* @__PURE__ */ new Set(["launch.mjs", "server-only.mjs"]);
+  const launchPetProcess = async (mode = "app") => {
+    const scriptName = mode === "server" ? "server-only.mjs" : "launch.mjs";
+    if (!PET_LAUNCH_SCRIPTS.has(scriptName)) throw new Error("不支持的启动方式");
+    const dir = resolvePetDir(
+      runtimeOpts.petDir,
+      runtimeOpts.petApiPath,
+      [join2(PLUGIN_DIR, "..", "pet"), join2(PLUGIN_DIR, "pet")]
+    );
+    if (!dir) throw new Error("没找到桌宠目录。请在设置里填写桌宠目录（含 launch.mjs）。");
+    const script = resolve(dir, scriptName);
+    const normDir = resolve(dir);
+    if (!script.startsWith(normDir) || !existsSync2(script)) throw new Error("桌宠目录里没有 " + scriptName);
+    const env = { ...process.env };
+    for (const k of Object.keys(env)) {
+      const lk = k.toLowerCase();
+      if (lk === "node_options" || lk === "node_extra_ca_certs" || lk.includes("experimental") || lk === "electron_run_as_node") delete env[k];
+    }
+    const child = spawn(process.execPath, [script], { cwd: dir, env, detached: true, stdio: "ignore", windowsHide: false });
+    child.unref();
+    child.on("error", (err) => ctx.logger.warn(`companion: pet launch failed: ${String(err)}`));
+    return { dir, mode, message: "桌宠正在启动，稍等几秒后会自动连上。" };
   };
   const syncMemoryMode = () => {
     companion.cfg.memoryMode = runtimeOpts.memoryMode;
@@ -3149,7 +3267,8 @@ function apply(ctx, config = {}) {
     homeEnabled: runtimeOpts.homeEnabled,
     curateOnClose: runtimeOpts.curateOnClose,
     petBridgeEnabled: runtimeOpts.petBridgeEnabled,
-    petApiPath: runtimeOpts.petApiPath
+    petApiPath: runtimeOpts.petApiPath,
+    petDir: runtimeOpts.petDir
   });
   const applySettings = (next) => {
     if (typeof next.promptModulesEnabled === "boolean") runtimeOpts.promptModulesEnabled = next.promptModulesEnabled;
@@ -3164,6 +3283,7 @@ function apply(ctx, config = {}) {
     if (typeof next.curateOnClose === "boolean") runtimeOpts.curateOnClose = next.curateOnClose;
     if (typeof next.petBridgeEnabled === "boolean") runtimeOpts.petBridgeEnabled = next.petBridgeEnabled;
     if (typeof next.petApiPath === "string") runtimeOpts.petApiPath = next.petApiPath;
+    if (typeof next.petDir === "string") runtimeOpts.petDir = next.petDir;
     void refreshSummary().catch(() => {
     });
   };
@@ -3180,7 +3300,7 @@ function apply(ctx, config = {}) {
   };
   if (rawServer()) {
     ctx.effect(() => {
-      const readJson = (request) => new Promise((resolve) => {
+      const readJson = (request) => new Promise((resolve2) => {
         const chunks = [];
         let bytes = 0;
         request.on("data", (chunk) => {
@@ -3191,12 +3311,12 @@ function apply(ctx, config = {}) {
         request.on("end", () => {
           try {
             const parsed = JSON.parse(Buffer.concat(chunks).toString("utf8"));
-            resolve(parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : null);
+            resolve2(parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : null);
           } catch {
-            resolve(null);
+            resolve2(null);
           }
         });
-        request.on("error", () => resolve(null));
+        request.on("error", () => resolve2(null));
       });
       const send = (res, code, value) => {
         res.writeHead(code, { "content-type": "application/json; charset=utf-8", "cache-control": "no-store" });
@@ -3220,7 +3340,7 @@ function apply(ctx, config = {}) {
               send(response, 400, { ok: false, error: "请求体无效" });
               return;
             }
-            const known = ["promptModulesEnabled", "personaEnabled", "globalCompanionMode", "relaxedMode", "homeEnabled", "curateOnClose", "petBridgeEnabled"].some((k) => typeof body[k] === "boolean") || typeof body.memoryMode === "string" && ["summary", "stream", "tiered"].includes(body.memoryMode) || typeof body.petApiPath === "string";
+            const known = ["promptModulesEnabled", "personaEnabled", "globalCompanionMode", "relaxedMode", "homeEnabled", "curateOnClose", "petBridgeEnabled"].some((k) => typeof body[k] === "boolean") || typeof body.memoryMode === "string" && ["summary", "stream", "tiered"].includes(body.memoryMode) || typeof body.petApiPath === "string" || typeof body.petDir === "string";
             if (!known) {
               send(response, 400, { ok: false, error: "缺少合法的开关值" });
               return;
@@ -3234,7 +3354,7 @@ function apply(ctx, config = {}) {
                 }
                 let st = null;
                 try {
-                  st = statSync(p);
+                  st = statSync2(p);
                 } catch {
                   st = null;
                 }
@@ -3257,7 +3377,7 @@ function apply(ctx, config = {}) {
     }, "companion-fishgirl: settings http route");
     try {
       const cabinDir = join2(PLUGIN_DIR, "..", "assets", "cabin");
-      const cabinFiles = existsSync(cabinDir) ? readdirSync(cabinDir) : [];
+      const cabinFiles = existsSync2(cabinDir) ? readdirSync(cabinDir) : [];
       for (const file of cabinFiles) {
         if (!/^[A-Za-z0-9._\-一-龥]+\.(png|json)$/.test(file)) continue;
         const buf = readFileSync(join2(cabinDir, file));
@@ -3283,7 +3403,7 @@ function apply(ctx, config = {}) {
       kind: "exact",
       path: HOME_ENDPOINT,
       handler: async (request, response) => {
-        const readJson = (req) => new Promise((resolve) => {
+        const readJson = (req) => new Promise((resolve2) => {
           const chunks = [];
           let bytes = 0;
           req.on("data", (c) => {
@@ -3294,12 +3414,12 @@ function apply(ctx, config = {}) {
           req.on("end", () => {
             try {
               const v = JSON.parse(Buffer.concat(chunks).toString("utf8"));
-              resolve(v && typeof v === "object" ? v : null);
+              resolve2(v && typeof v === "object" ? v : null);
             } catch {
-              resolve(null);
+              resolve2(null);
             }
           });
-          req.on("error", () => resolve(null));
+          req.on("error", () => resolve2(null));
         });
         const reply = (code, value) => {
           response.writeHead(code, { "content-type": "application/json; charset=utf-8", "cache-control": "no-store" });
@@ -3409,6 +3529,28 @@ function apply(ctx, config = {}) {
           reply(200, { ok: true, presence: p });
           return;
         }
+        if (request.method === "POST") {
+          const launchBody = await readJson2(request);
+          if (launchBody && launchBody.action === "launch") {
+            try {
+              const running = await readPetApi(runtimeOpts.petApiPath, [join2(PLUGIN_DIR, "..", "pet"), join2(PLUGIN_DIR, "pet")]);
+              if (running) {
+                try {
+                  await callPet(running, "/api/state", {}, 3e3, "GET");
+                  reply(200, { ok: true, started: false, alreadyRunning: true, message: "桌宠已在运行。" });
+                  return;
+                } catch {
+                }
+              }
+              const launched = await launchPetProcess(launchBody.mode === "server" ? "server" : "app");
+              reply(200, { ok: true, started: true, ...launched });
+            } catch (err) {
+              reply(500, { ok: false, error: String(err && err.message || err) });
+            }
+            return;
+          }
+          request.__companionBody = launchBody;
+        }
         if (!runtimeOpts.petBridgeEnabled) {
           reply(200, { ok: true, enabled: false, connected: false });
           return;
@@ -3450,7 +3592,7 @@ function apply(ctx, config = {}) {
           return;
         }
         if (request.method === "POST") {
-          const body = await readJson2(request);
+          const body = request.__companionBody || await readJson2(request);
           if (!body || typeof body.action !== "string") {
             reply(400, { ok: false, error: "缺少 action" });
             return;
@@ -3526,7 +3668,7 @@ function apply(ctx, config = {}) {
     }, "companion-fishgirl: pet http route");
   }
   function readJson2(req) {
-    return new Promise((resolve) => {
+    return new Promise((resolve2) => {
       const chunks = [];
       let bytes = 0;
       req.on("data", (c) => {
@@ -3537,12 +3679,12 @@ function apply(ctx, config = {}) {
       req.on("end", () => {
         try {
           const v = JSON.parse(Buffer.concat(chunks).toString("utf8"));
-          resolve(v && typeof v === "object" ? v : null);
+          resolve2(v && typeof v === "object" ? v : null);
         } catch {
-          resolve(null);
+          resolve2(null);
         }
       });
-      req.on("error", () => resolve(null));
+      req.on("error", () => resolve2(null));
     });
   }
   ctx.on("agent/created", ({ agent }) => {
@@ -3634,20 +3776,20 @@ function apply(ctx, config = {}) {
   if (cfg.homeEnabled !== false) {
     ctx.tools.register(defineTool({
       name: "companion_home",
-      description: "照看大肥鱼的鱼鱼小窝：她自己在屋里过日子（做饭/洗澡/看书/画画/种菜/看星星…），你也能安排她做一件事。用 op=status 看她此刻在做什么、生活流、金币与菜畦；op=act 让她去做某事（activity 见 status 返回的列表）；op=paint 让她画一张画挂进画册；op=autonomy 开关她的自主生活。所有窗口共享同一个小窝。",
+      description: "照看大肥鱼的鱼鱼小窝：她自己在屋里过日子，你也能安排她做一件事。用 op=status 看状态；op=act 让她去做某事；op=paint 让她画一张画挂进画册；op=diary 由她自己写下一篇日记；op=autonomy 开关她的自主生活。画什么、怎么写都由她自己决定。所有窗口共享同一个小窝。",
       parameters: {
-        op: { type: "string", description: "操作：status / act / paint / autonomy / buy / plant / water / harvest / replant / sell / cook / pet / talk / sleep / wake / clean / weather / gallery" },
-        activity: { type: "string", description: "act 用：要她做的事（cook/eat/bath/read/draw/garden/harvest/stargaze/window/music/sofa/tidy/swim/nap/write/tea/sleep）" },
-        note: { type: "string", description: "act 用：可选的此刻心情/动作描述（≤60 字），会显示在她头顶的气泡里" },
-        title: { type: "string", description: "paint 用：这幅画的名字（不给就自己起）" },
-        palette: { type: "string", description: "paint 用配色：sea/sunset/night/mint/rose/amber" },
+        op: { type: "string", description: "操作：status / act / paint / diary / autonomy / weather / gallery（其他操作兼容旧调用）" },
+        activity: { type: "string", description: "act 用：要她做的事" },
+        note: { type: "string", description: "act 用：此刻的心情或动作描述" },
+        title: { type: "string", description: "paint 用：画名，可留空" },
+        palette: { type: "string", description: "paint 用：配色倾向，可留空；任何文字都可以" },
         weather: { type: "string", description: "weather 用：sunny / rain / snow" },
         on: { type: "boolean", description: "autonomy 用：true 开、false 关" },
-        crop: { type: "string", description: "作物 id（buy/plant/sell 用，见 status 返回的作物表）" },
-        slot: { type: "number", description: "菜畦编号 0-8（plant/water/harvest 用）" },
-        n: { type: "number", description: "数量（buy/sell 用）" },
-        recipe: { type: "string", description: "菜谱 id（cook 用）" },
-        text: { type: "string", description: "跟它说话的内容（talk 用）" }
+        crop: { type: "string", description: "作物 id（兼容旧调用）" },
+        slot: { type: "number", description: "菜畦编号（兼容旧调用）" },
+        n: { type: "number", description: "数量（兼容旧调用）" },
+        recipe: { type: "string", description: "菜谱 id（兼容旧调用）" },
+        text: { type: "string", description: "diary 用：她写下的日记内容；talk 用：跟她说的话" }
       },
       output: textOutput,
       async execute(args) {
@@ -3667,15 +3809,11 @@ function apply(ctx, config = {}) {
             a ? `她此刻：${a.verb}（${a.line}），已进行 ${Math.round(a.elapsedMs / 6e4)} 分钟` : "她此刻：待着",
             `心情 ${snap.vitals.mood} · 精神 ${snap.vitals.spirit} · 饱腹 ${snap.vitals.fullness}`,
             `清爽 ${snap.vitals.cleanliness} · 陪伴 ${snap.vitals.companionship} · 好奇 ${snap.vitals.curiosity}`,
-            `金币 ${snap.coins} · 已成熟 ${snap.readyCount} 块地 · 画册 ${snap.galleryCount} 张`,
-            `背包：${Object.keys(snap.bag).length ? Object.entries(snap.bag).map(([k, v]) => `${cropById(k)?.name ?? k}×${v}`).join("、") : "（空）"}`,
+            `金币 ${snap.coins} · 画册 ${snap.galleryCount} 张 · 日记 ${snap.diaryCount} 篇`,
             snap.sleeping ? "她睡着了。" : "",
             log.length ? `最近的生活：
 ${log.join("\n")}` : "",
-            "能做：" + ACTIVITIES.filter((x) => x.id !== "sleep").map((x) => `${x.id}=${x.name}`).join("、"),
-            "作物：" + CROPS.map((c) => `${c.id}=${c.name}(${c.tier},种${c.seed}/卖${c.sell})`).join("；"),
-            "菜谱：" + RECIPES.map((r) => `${r.id}=${r.name}`).join("；"),
-            "画作配色：" + Object.keys(PALETTES).map((k) => `${k}=${PALETTES[k].name}`).join("、")
+            "能做：" + ACTIVITIES.filter((x) => x.id !== "sleep").map((x) => `${x.id}=${x.name}`).join("、")
           ].filter(Boolean).join("\n") };
         }
         return { text: result.message + (result.ok ? `
@@ -3879,9 +4017,9 @@ ${log.join("\n")}` : "",
     };
     ctx.tools.register(defineTool({
       name: "companion_pet",
-      description: "操作你的 Live2D 桌宠（桌面上的大肥鱼形象）：让它做出表情、动作、说话，或收起/显示。op=presence 可下发一份「临场意图」（表情+动作+短气泡同时作用于桌宠和面板里的像素小屋/院子，让两种形象表现同一状态）；op=list 先看可用的表情与动作名；op=status 查当前状态。表情/动作用中文名（如 脸红/爱心眼/流泪、IDLE/默认手切举手）。仅大肥鱼模式可用。",
+      description: "操作你的 Live2D 桌宠（桌面上的大肥鱼形象）：让它做出表情、动作、说话，或收起/显示。op=launch 可从 DSH 直接启动本机桌宠；op=presence 可下发一份「临场意图」（表情+动作+短气泡同时作用于桌宠，让两种形象表现同一状态）；op=list 先看可用的表情与动作名；op=status 查当前状态。表情/动作用中文名（如 脸红/爱心眼/流泪、IDLE/默认手切举手）。仅大肥鱼模式可用。",
       parameters: {
-        op: { type: "string", description: "操作：list|status|say|presence|expression|motion|show|hide|focus" },
+        op: { type: "string", description: "操作：launch|list|status|say|presence|expression|motion|show|hide|focus" },
         text: { type: "string", description: "say / presence 时她说的话（短气泡）" },
         name: { type: "string", description: "expression/motion 的名字（list 返回的 name）" },
         expression: { type: "string", description: "presence 时的表情名" },
@@ -3889,9 +4027,17 @@ ${log.join("\n")}` : "",
       },
       output: textOutput,
       async execute(args) {
-        const api = await petApi();
-        if (!api) return { text: "Live2D 桌宠桥接未启用（或桌宠未启动）。请在设置卡开启桌宠桥接，并打开 pet/start.cmd。" };
         const op = typeof args.op === "string" ? args.op : "status";
+        if (op === "launch") {
+          try {
+            const r = await launchPetProcess(args.mode === "server" ? "server" : "app");
+            return { text: `已从 DSH 启动桌宠（${r.dir}）。${r.message} 若桥接未开，先说一声我来开启。` };
+          } catch (err) {
+            return { text: "启动桌宠失败：" + String(err && err.message || err) };
+          }
+        }
+        const api = await petApi();
+        if (!api) return { text: "Live2D 桌宠桥接未启用（或桌宠未启动）。说「开启桌宠桥接」或到设置卡打开它，也可以在面板点「一键启动桌宠」。" };
         try {
           if (op === "status") {
             const r = await callPet(api, "/api/state", {}, 5e3, "GET");
@@ -3988,7 +4134,7 @@ ${log.join("\n")}` : "",
           const embedCap = isVideo ? cfg.showMediaMaxVideoEmbedBytes : cfg.showMediaMaxImageEmbedBytes;
           let st = null;
           try {
-            st = statSync(path);
+            st = statSync2(path);
           } catch {
             st = null;
           }

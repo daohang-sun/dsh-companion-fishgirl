@@ -15,8 +15,9 @@
  */
 
 import { readFile } from 'node:fs/promises'
+import { existsSync, statSync } from 'node:fs'
 import { homedir } from 'node:os'
-import { isAbsolute, join } from 'node:path'
+import { dirname, isAbsolute, join } from 'node:path'
 
 const DEFAULT_DIRS = ['大肥鱼插件', 'deepfish-desktop-pet', 'DeepFish-desktop-pet', 'WHALEL2D']
 /** 桌宠响应体上限（2 MiB），防止异常/被篡改的本地服务把宿主内存撑爆。 */
@@ -93,9 +94,38 @@ export async function readPetApi(configured, extraDirs = []) {
 export function petUnavailableError() {
   return {
     connected: false,
-    error: '未检测到 Live2D 桌宠。请先打开桌宠程序（dsh-companion-fishgirl/pet/start.cmd），'
-      + '它会自动读取你本机解压的大肥鱼模型并生成 api.json；也可在设置里手动指定 api.json 路径。',
+    error: '未检测到 Live2D 桌宠。可在「Live2D 桌宠」页点「一键启动桌宠」，'
+      + '它会读取你本机解压的大肥鱼模型并生成 api.json；若启动失败，再检查桌宠目录或手动指定 api.json 路径。',
   }
+}
+
+/**
+ * 解析桌宠目录（用于一键启动）：显式 petDir 优先，其次从 api.json 的父目录
+ * 推导，再退回常见安装位置。只返回真实存在、且带启动脚本的目录。
+ */
+export function resolvePetDir(petDir, configuredApi, extraDirs = []) {
+  const isAbs = (p) => isAbsolute(p) || /^[A-Za-z]:[\\/]/.test(p)
+  const dirs = []
+  if (typeof petDir === 'string' && petDir.trim() && isAbs(petDir.trim())) dirs.push(petDir.trim())
+  if (typeof configuredApi === 'string' && configuredApi.trim() && isAbs(configuredApi.trim())) {
+    dirs.push(dirname(configuredApi.trim()))
+  }
+  for (const d of extraDirs) if (isAbs(d)) dirs.push(d)
+  const roots = [userHome()]
+  if (typeof process !== 'undefined' && process.env?.DSH_HOME && process.env.DSH_HOME !== userHome()) {
+    roots.push(process.env.DSH_HOME)
+  }
+  for (const root of roots) for (const name of ['pet', ...DEFAULT_DIRS]) dirs.push(join(root, name))
+  const seen = new Set()
+  for (const dir of dirs) {
+    if (seen.has(dir)) continue
+    seen.add(dir)
+    try {
+      if (!statSync(dir).isDirectory()) continue
+      if (existsSync(join(dir, 'launch.mjs'))) return dir
+    } catch { /* 继续找下一个 */ }
+  }
+  return null
 }
 
 /** 调用桌宠本机接口（所有请求从宿主发出，token 不进浏览器）。 */
@@ -143,4 +173,4 @@ export function isRichPet(api) {
   return !!api && (api.version >= 2 || api.version === '2')
 }
 
-export default { resolveApiPath, readPetApi, petUnavailableError, callPet, petText, isRichPet }
+export default { resolveApiPath, resolvePetDir, readPetApi, petUnavailableError, callPet, petText, isRichPet }

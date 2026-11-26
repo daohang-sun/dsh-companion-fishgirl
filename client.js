@@ -271,14 +271,16 @@ window.__ModuleLoader__.load({
       homeEnabled: d.homeEnabled !== false,
       curateOnClose: d.curateOnClose !== false,
       petBridgeEnabled: d.petBridgeEnabled === true,
+      petDir: typeof d.petDir === 'string' ? d.petDir : '',
     })
     function CompanionSettingsCard() {
       ensureCfgStyle()
       const [opts, setOpts] = React.useState(null)
       const [err, setErr] = React.useState('')
+      const [petDirInput, setPetDirInput] = React.useState('')
       React.useEffect(() => {
         let alive = true
-        settingsApi('GET').then((d) => { if (alive) setOpts(readOpts(d)) })
+        settingsApi('GET').then((d) => { if (alive) { setOpts(readOpts(d)); setPetDirInput(readOpts(d).petDir || '') } })
           .catch((e) => { if (alive) setErr(String(e && e.message || e)) })
         return () => { alive = false }
       }, [])
@@ -328,127 +330,141 @@ window.__ModuleLoader__.load({
             style: selectStyle, onChange: (e) => save({ memoryMode: e.target.value }),
           }, MEMORY_MODES.map(m => h('option', { key: m.id, value: m.id }, m.label)))),
         Row('homeEnabled', '鱼鱼小窝',
-          '侧栏里的小窝面板：生活数值、种田、画册、记忆星图。'),
+          '侧栏里的小窝面板：画册、日记、记忆星图与桌宠联动。'),
         Row('curateOnClose', '会话整理',
           '窗口关闭后，下扇窗口打开时让大肥鱼自己挑选值得长期记住的内容。'),
         Group('桌面形象'),
         Row('petBridgeEnabled', 'Live2D 桌宠桥接',
-          '连接本机 pet/ 桌宠进程；开启后侧栏「鱼鱼小窝 → Live2D 桌宠」可联动表情/动作，大肥鱼也能用工具驱动它。需先启动桌宠。'),
+          '连接本机桌宠进程；开启后侧栏「鱼鱼小窝 → Live2D 桌宠」可联动表情/动作，大肥鱼也能用工具驱动它。'),
+        h('div', { className: 'cfgs-row' },
+          h('div', { className: 'cfgs-label' },
+            h('span', { className: 'cfgs-title' }, '桌宠目录'),
+            h('span', { className: 'cfgs-desc' }, '含 launch.mjs 的桌宠目录绝对路径，用于面板「一键启动桌宠」。留空则自动探测。')),
+          h('div', { style: { display: 'flex', gap: 6, alignItems: 'center', maxWidth: '56%' } },
+            h('input', {
+              type: 'text', 'aria-label': '桌宠目录', placeholder: '留空自动探测',
+              value: petDirInput, disabled: !opts,
+              onChange: (e) => setPetDirInput(e.target.value),
+              style: { flex: 1, minWidth: 100, background: 'transparent', color: 'inherit', border: 'none', borderBottom: '1px solid var(--dsw-alias-border-l2)', fontSize: 12, padding: '4px 6px' },
+            }),
+            h('button', { type: 'button', disabled: !opts, onClick: () => save({ petDir: petDirInput.trim() }),
+              style: { fontSize: 11, padding: '3px 9px', borderRadius: 8, cursor: 'pointer', border: '1px solid var(--dsw-alias-border-l2)', background: 'transparent', color: 'inherit' } }, '保存'))),
         err ? h('div', { className: 'cfgs-err', role: 'alert' }, '保存失败：' + err) : null)
     }
 
     // ── v0.18.0 鱼鱼小窝面板 ────────────────────────────────────────────
     const HOME_PANEL_ID = 'fish-home'
     const HOME_STYLE_ID = 'companion-fishgirl-home-style'
-    const HOME_CSS = `
-.fh-shell{height:100%;min-height:0;box-sizing:border-box;display:flex;flex-direction:column;gap:12px;overflow:hidden;padding-top:18px;font-size:13px;color:var(--dsw-alias-label-primary,currentColor)}
+    const HOME_CSS = `.fh-shell{--fh-accent:#4a9fc2;--fh-accent-soft:rgba(74,159,194,.14);--fh-accent-line:rgba(74,159,194,.42);--fh-border:var(--dsw-alias-border-l2,rgba(105,151,177,.22));--fh-surface:var(--dsw-alias-fill-tertiary,rgba(116,174,197,.07));--fh-raised:var(--dsw-alias-bg-elevated,rgba(255,255,255,.6));--fh-text:var(--dsw-alias-label-primary,currentColor);--fh-text-2:var(--dsw-alias-label-secondary,currentColor);--fh-text-3:var(--dsw-alias-label-tertiary,currentColor);--fh-r-lg:16px;--fh-r-md:12px;--fh-r-sm:9px;--fh-shadow:0 8px 24px rgba(50,101,132,.06);height:100%;min-height:0;box-sizing:border-box;display:flex;flex-direction:column;gap:14px;overflow:hidden;padding-top:18px;font-size:13px;line-height:1.55;color:var(--fh-text);font-family:inherit;-webkit-font-smoothing:antialiased}
 .fh-head,.fh-tabs{flex:none;margin-left:18px;margin-right:18px}
-.fh-body{flex:1;min-height:0;overflow-y:auto;overflow-x:hidden;overscroll-behavior-y:contain;padding:0 18px 28px}
-.fh-view{display:flex;flex-direction:column;gap:12px;max-width:920px;margin:0 auto;width:100%}
-.fh-scene-wrap{position:relative}
+.fh-body{flex:1;min-height:0;overflow-y:auto;overflow-x:hidden;overscroll-behavior-y:contain;padding:0 18px 28px;scrollbar-width:thin}
+.fh-view{display:flex;flex-direction:column;gap:14px;max-width:920px;margin:0 auto;width:100%}
 .fh-head{display:flex;align-items:flex-start;justify-content:space-between;gap:12px}
-.fh-title{font-size:15px;font-weight:600;letter-spacing:.2px;display:flex;align-items:center;gap:7px}
-.fh-sub{font-size:11.5px;color:var(--dsw-alias-label-secondary,currentColor);margin-top:3px;opacity:.85}
-.fh-ghost{border:1px solid var(--dsw-alias-border-l2,rgba(105,151,177,.24));background:var(--dsw-alias-fill-tertiary,rgba(116,174,197,.06));color:inherit;padding:5px 12px;border-radius:999px;font-size:12px;cursor:pointer;white-space:nowrap;transition:border-color .16s,background .16s,color .16s,opacity .16s}
-.fh-ghost:hover{border-color:var(--dsw-alias-accent-primary,#4a9fc2);background:var(--dsw-alias-fill-secondary,rgba(116,174,197,.12))}
-.fh-ghost:disabled{opacity:.42;cursor:default}
-.fh-tabs{display:flex;gap:5px;flex-wrap:wrap;padding:3px;border-radius:12px;background:var(--dsw-alias-fill-tertiary,rgba(116,174,197,.08));align-self:flex-start;border:1px solid var(--dsw-alias-border-l2,rgba(105,151,177,.16))}
-.fh-tab{border:1px solid transparent;background:transparent;color:var(--dsw-alias-label-secondary,currentColor);padding:5px 13px;border-radius:9px;font-size:12px;cursor:pointer;transition:background .18s,color .18s,border-color .18s,opacity .18s}
-.fh-tab:hover{background:var(--dsw-alias-fill-secondary,rgba(116,174,197,.12));color:var(--dsw-alias-label-primary,currentColor)}
-.fh-tab:disabled{opacity:.42;cursor:default}
-.fh-tab[data-active="true"]{background:var(--dsw-alias-bg-elevated,#fff);color:var(--dsw-alias-label-primary,currentColor);box-shadow:0 1px 4px rgba(40,60,90,.13);font-weight:600}
-.fh-panel{border:1px solid var(--dsw-alias-border-l2,rgba(105,151,177,.22));border-radius:16px;padding:14px;background:var(--dsw-alias-fill-tertiary,rgba(116,174,197,.07));box-shadow:0 8px 24px rgba(50,101,132,.05)}
-.fh-panel-title{font-size:12px;font-weight:600;opacity:.8;margin-bottom:9px;display:flex;justify-content:space-between;align-items:center}
-
-/* ── 数值 / 生活流 ── */
-.fh-vitals{display:grid;grid-template-columns:repeat(3,1fr);gap:8px}
-.fh-vital{border:.5px solid var(--dsw-alias-border-l2,rgba(127,127,127,.22));border-radius:12px;padding:9px 11px;
-  display:flex;flex-direction:column;gap:6px;background:var(--dsw-alias-bg-elevated,rgba(255,255,255,.5))}
-.fh-vital-top{display:flex;justify-content:space-between;align-items:baseline;gap:6px;font-size:11.5px;color:var(--dsw-alias-label-secondary,currentColor)}
-.fh-vital-num{font-size:15px;font-weight:650;color:var(--dsw-alias-label-primary,currentColor);font-variant-numeric:tabular-nums}
-.fh-track{height:5px;border-radius:99px;background:rgba(122,144,172,.18);overflow:hidden}
-.fh-track i{display:block;height:100%;border-radius:99px;transition:width .6s cubic-bezier(.2,.9,.3,1)}
-.fh-chips{display:flex;gap:6px;flex-wrap:wrap}
-.fh-chip{border:.5px solid var(--dsw-alias-border-l2,rgba(127,127,127,.3));background:var(--dsw-alias-bg-elevated,rgba(255,255,255,.6));
-  color:inherit;padding:5px 11px;border-radius:999px;font-size:12px;cursor:pointer;transition:all .16s}
-.fh-chip:hover{border-color:var(--dsw-alias-accent-primary,#3b82f6);transform:translateY(-1px)}
-.fh-chip:disabled{opacity:.4;cursor:default;transform:none}
+.fh-title{font-size:15px;font-weight:650;letter-spacing:.2px;display:flex;align-items:center;gap:7px;line-height:1.4}
+.fh-sub{font-size:11.5px;color:var(--fh-text-2);margin-top:3px;opacity:.85}
+.fh-ghost{border:1px solid var(--fh-border);background:var(--fh-surface);color:var(--fh-text);padding:6px 13px;border-radius:999px;font-size:12px;cursor:pointer;white-space:nowrap;transition:background .16s,border-color .16s,transform .16s}
+.fh-ghost:hover{border-color:var(--fh-accent-line);background:var(--fh-accent-soft);transform:translateY(-1px)}
+.fh-ghost:disabled{opacity:.42;cursor:default;transform:none}
+.fh-tabs{display:flex;gap:4px;flex-wrap:wrap;padding:4px;border-radius:var(--fh-r-md);background:var(--fh-surface);align-self:flex-start;border:1px solid var(--fh-border)}
+.fh-tab{border:1px solid transparent;background:transparent;color:var(--fh-text-2);padding:6px 14px;border-radius:var(--fh-r-sm);font-size:12px;cursor:pointer;font-family:inherit;transition:background .18s,color .18s,border-color .18s,transform .18s}
+.fh-tab:hover{background:var(--fh-accent-soft);color:var(--fh-text)}
+.fh-tab[data-active="true"]{background:var(--fh-raised);color:var(--fh-text);box-shadow:0 1px 5px rgba(40,60,90,.14);font-weight:650}
+.fh-panel{border:1px solid var(--fh-border);border-radius:var(--fh-r-lg);padding:15px 16px;background:var(--fh-surface);box-shadow:var(--fh-shadow)}
+.fh-panel-title{font-size:12px;font-weight:650;margin-bottom:11px;display:flex;justify-content:space-between;align-items:center;gap:10px;color:var(--fh-text)}
+.fh-panel-title>span:last-child{font-weight:400;opacity:.62;font-size:11px}
+.fh-chips{display:flex;gap:7px;flex-wrap:wrap}
+.fh-chip{border:1px solid var(--fh-border);background:var(--fh-raised);color:var(--fh-text);padding:6px 12px;border-radius:999px;font-size:12px;cursor:pointer;font-family:inherit;transition:background .16s,border-color .16s,transform .16s,box-shadow .16s}
+.fh-chip:hover:not(:disabled){border-color:var(--fh-accent-line);background:var(--fh-accent-soft);transform:translateY(-1px)}
+.fh-chip:active:not(:disabled){transform:translateY(0)}
+.fh-chip:disabled{opacity:.4;cursor:default}
+.fh-chip[data-tone="accent"]{border-color:var(--fh-accent-line);background:var(--fh-accent-soft);color:var(--fh-accent)}
+.fh-msg{font-size:12px;color:var(--fh-text-2);min-height:16px;line-height:1.6}
+.fh-empty{font-size:12px;color:var(--fh-text-2);padding:14px 0;opacity:.8;text-align:center}
+.fh-input{border:1px solid var(--fh-border);border-radius:var(--fh-r-sm);padding:8px 11px;background:var(--fh-raised);color:var(--fh-text);font-size:12px;width:100%;box-sizing:border-box;font-family:inherit;transition:border-color .16s,box-shadow .16s}
+.fh-input::placeholder{color:var(--fh-text-3);opacity:.7}
+.fh-select{border:1px solid var(--fh-border);background:var(--fh-raised);color:var(--fh-text);padding:6px 9px;border-radius:var(--fh-r-sm);font-size:12px;font-family:inherit;transition:border-color .16s}
+.fh-select:focus,.fh-input:focus{outline:none;border-color:var(--fh-accent-line);box-shadow:0 0 0 3px var(--fh-accent-soft)}
+.fh-chip:focus-visible,.fh-tab:focus-visible,.fh-ghost:focus-visible,.fh-pet-btn:focus-visible{outline:2px solid var(--fh-accent);outline-offset:2px}
 .fh-feed{display:flex;flex-direction:column}
-.fh-feed-item{display:flex;gap:9px;font-size:12px;padding:6px 0;align-items:flex-start;position:relative}
-.fh-feed-item+.fh-feed-item{border-top:.5px dashed var(--dsw-alias-border-l3,rgba(127,127,127,.18))}
-.fh-feed-t{flex:none;width:38px;color:var(--dsw-alias-label-tertiary,currentColor);font-variant-numeric:tabular-nums;opacity:.8}
-.fh-feed-x{line-height:1.5}
-.fh-empty{font-size:12px;color:var(--dsw-alias-label-secondary,currentColor);padding:10px 0;opacity:.8}
+.fh-feed-item{display:flex;gap:9px;font-size:12px;padding:7px 0;align-items:flex-start}
+.fh-feed-item+.fh-feed-item{border-top:1px dashed var(--fh-border)}
+.fh-feed-t{flex:none;width:38px;color:var(--fh-text-3);font-variant-numeric:tabular-nums;opacity:.8}
+.fh-feed-x{line-height:1.55}
+.fh-vitals{display:grid;grid-template-columns:repeat(3,1fr);gap:9px}
+.fh-vital{border:1px solid var(--fh-border);border-radius:var(--fh-r-md);padding:9px 11px;display:flex;flex-direction:column;gap:6px;background:var(--fh-raised)}
+.fh-vital-top{display:flex;justify-content:space-between;align-items:baseline;gap:6px;font-size:11.5px;color:var(--fh-text-2)}
+.fh-vital-num{font-size:15px;font-weight:650;color:var(--fh-text);font-variant-numeric:tabular-nums}
+.fh-track{height:5px;border-radius:99px;background:rgba(122,144,172,.16);overflow:hidden}
+.fh-track i{display:block;height:100%;border-radius:99px;transition:width .6s cubic-bezier(.2,.9,.3,1)}
 
-/* ── 院子 ── */
-.fh-yard-scene{position:relative;width:100%;aspect-ratio:3/2;overflow:hidden;border-radius:8px;box-sizing:border-box;
-  background:#839477;touch-action:manipulation;isolation:isolate;border:2px solid #7D887A}
-.fh-yard-scene canvas{display:block;width:100%;height:100%;image-rendering:pixelated;image-rendering:crisp-edges}
-.fh-yard-plot-hit{position:absolute;width:12.5%;height:15%;transform:translate(-50%,-50%);
-  border:0;padding:0;background:transparent;cursor:pointer;border-radius:0}
-.fh-yard-plot-hit:hover{box-shadow:inset 0 0 0 2px rgba(238,226,190,.42)}
-.fh-yard-plot-hit:focus-visible{outline:2px solid #F2D68C;outline-offset:2px}
-.fh-yard-plot-hit[data-ready="true"]::after{content:'';position:absolute;right:13%;top:15%;width:6px;height:6px;
-  background:#E8C46A;box-shadow:0 0 0 2px rgba(66,54,38,.5)}
-.fh-yard-plot-hit[data-watered="true"]::after{content:'';position:absolute;left:15%;top:16%;width:4px;height:4px;
-  background:#8FC0D4;box-shadow:0 0 0 1px rgba(52,74,86,.4)}
-.fh-shop{display:grid;grid-template-columns:repeat(auto-fill,minmax(104px,1fr));gap:7px}
-.fh-shop-item{border:.5px solid var(--dsw-alias-border-l2,rgba(127,127,127,.25));border-radius:10px;padding:7px 8px;
-  display:flex;align-items:center;gap:6px;cursor:pointer;background:var(--dsw-alias-bg-elevated,rgba(255,255,255,.55));font-size:11.5px;
-  color:inherit;font-family:inherit;text-align:left;width:100%;box-sizing:border-box}
-.fh-shop-item:hover{border-color:var(--dsw-alias-accent-primary,#3b82f6)}
-.fh-shop-item[data-sel="true"]{border-color:var(--dsw-alias-accent-primary,#3b82f6);box-shadow:0 0 0 1px var(--dsw-alias-accent-primary,#3b82f6) inset}
-.fh-bag{display:flex;gap:6px;flex-wrap:wrap;font-size:11.5px}
-.fh-bag span{padding:3px 8px;border-radius:999px;background:rgba(127,150,180,.13)}
-.fh-select{border:.5px solid var(--dsw-alias-border-l2,rgba(127,127,127,.3));background:var(--dsw-alias-bg-elevated,#fff);
-  color:inherit;padding:5px 8px;border-radius:8px;font-size:12px}
-
-/* ── 画册 / 星图 ── */
-.fh-gallery{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:10px}
-.fh-art{border-radius:12px;overflow:hidden;border:.5px solid var(--dsw-alias-border-l2,rgba(127,127,127,.25));
-  background:var(--dsw-alias-bg-elevated,rgba(255,255,255,.55));animation:fhPop .45s ease both}
+/* 画作：自主创作，构图随 seed 自由变化 */
+.fh-gallery{display:grid;grid-template-columns:repeat(auto-fill,minmax(158px,1fr));gap:12px}
+.fh-art{border-radius:var(--fh-r-md);overflow:hidden;border:1px solid var(--fh-border);background:var(--fh-raised);animation:fhPop .45s ease both;transition:transform .18s,box-shadow .18s}
+.fh-art:hover{transform:translateY(-3px);box-shadow:0 10px 22px rgba(30,60,90,.16)}
 .fh-art svg{display:block;width:100%;height:auto}
-.fh-art-cap{padding:6px 9px 8px;font-size:11.5px;display:flex;justify-content:space-between;gap:6px;align-items:baseline}
-.fh-art-cap b{font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.fh-art-cap i{font-style:normal;opacity:.65;font-size:10.5px;flex:none}
-.fh-star{width:100%;height:auto;max-height:440px;border-radius:14px;background:radial-gradient(70% 60% at 50% 40%,#16203C,#0B1020 75%)}
-.fh-legend{display:flex;gap:14px;flex-wrap:wrap;font-size:11px;color:var(--dsw-alias-label-secondary,currentColor);margin-top:8px}
+.fh-art-cap{padding:7px 10px 9px;font-size:11.5px;display:flex;justify-content:space-between;gap:6px;align-items:baseline}
+.fh-art-cap b{font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1;min-width:0}
+.fh-art-cap i{font-style:normal;opacity:.6;font-size:10.5px;flex:none}
+
+/* 日记：卡片列表，按日期分组 */
+.fh-diary{display:flex;flex-direction:column;gap:10px}
+.fh-diary-day{font-size:11px;font-weight:650;color:var(--fh-text-2);letter-spacing:.4px;margin-top:2px}
+.fh-diary-card{border:1px solid var(--fh-border);border-radius:var(--fh-r-md);padding:12px 14px;background:var(--fh-raised);transition:border-color .16s,transform .16s;animation:fhPop .4s ease both}
+.fh-diary-card:hover{border-color:var(--fh-accent-line)}
+.fh-diary-text{font-size:12.5px;line-height:1.75;white-space:pre-wrap;word-break:break-word;color:var(--fh-text)}
+.fh-diary-meta{display:flex;justify-content:space-between;gap:8px;margin-top:8px;font-size:10.5px;color:var(--fh-text-3);opacity:.8}
+
+/* 3D 星图 */
+.fh-star-stage{position:relative;width:100%;height:440px;border-radius:var(--fh-r-md);overflow:hidden;background:radial-gradient(80% 70% at 50% 36%,#182546 0%,#0C1328 58%,#070B18 100%);box-shadow:inset 0 0 80px rgba(10,18,40,.7);touch-action:none;cursor:grab}
+.fh-star-stage:active{cursor:grabbing}
+.fh-star-stage canvas{display:block;width:100%;height:100%}
+.fh-star-hud{position:absolute;left:12px;top:12px;display:flex;gap:6px;flex-wrap:wrap;pointer-events:none}
+.fh-star-hud span{font-size:10.5px;padding:4px 9px;border-radius:999px;background:rgba(16,26,52,.72);color:#CFE0FF;backdrop-filter:blur(6px);font-variant-numeric:tabular-nums}
+.fh-star-tip{position:absolute;right:12px;bottom:10px;font-size:10px;color:rgba(207,224,255,.62);pointer-events:none;text-shadow:0 1px 3px #000}
+.fh-star-tip b{color:#EAF1FF;font-weight:600}
+.fh-star-detail{position:absolute;left:12px;bottom:12px;max-width:62%;padding:8px 11px;border-radius:10px;background:rgba(12,20,44,.86);border:1px solid rgba(120,150,220,.3);color:#E8F0FF;font-size:11.5px;line-height:1.6;pointer-events:none;box-shadow:0 6px 18px rgba(0,0,0,.4)}
+.fh-star-detail b{display:block;font-size:12.5px;margin-bottom:2px}
+.fh-legend{display:flex;gap:14px;flex-wrap:wrap;font-size:11px;color:var(--fh-text-2);margin-top:9px}
 .fh-dot{display:inline-block;width:8px;height:8px;border-radius:50%;margin-right:5px;vertical-align:middle}
-.fh-msg{font-size:12px;color:var(--dsw-alias-label-secondary,currentColor);min-height:16px;line-height:1.5}
 
-/* ── 动画 ── */
-@keyframes fhPop{from{opacity:0;transform:translateY(6px) scale(.97)}to{opacity:1;transform:none}}
+/* Live2D 桌宠 */
+.fh-pet-hero{display:flex;align-items:center;gap:13px;padding:16px;border-radius:var(--fh-r-lg);background:linear-gradient(135deg,var(--fh-accent-soft),rgba(150,110,200,.12));border:1px solid var(--fh-accent-line);box-shadow:var(--fh-shadow)}
+.fh-pet-hero-main{flex:1;min-width:0}
+.fh-pet-orb{width:52px;height:52px;border-radius:50%;flex:none;display:grid;place-items:center;font-size:26px;background:radial-gradient(circle at 35% 30%,#EAF4FF,#8FB6E8 65%,#5B7FD4);box-shadow:0 4px 14px rgba(70,110,190,.32),0 0 0 3px rgba(255,255,255,.28) inset}
+.fh-pet-orb[data-on="false"]{filter:grayscale(.85);opacity:.65;box-shadow:none}
+.fh-pet-title{font-size:13.5px;font-weight:650}
+.fh-pet-sub{font-size:11.5px;opacity:.78;margin-top:3px;line-height:1.55}
+.fh-pet-dot{display:inline-block;width:7px;height:7px;border-radius:50%;margin-right:5px}
+.fh-pet-launch{display:flex;flex:none;align-items:center;justify-content:center;gap:6px;border:1px solid var(--fh-accent-line);background:var(--fh-accent);color:#fff;padding:9px 15px;border-radius:999px;font-size:12px;font-weight:600;cursor:pointer;font-family:inherit;transition:transform .16s,box-shadow .16s,opacity .16s;box-shadow:0 4px 12px rgba(74,159,194,.3)}
+.fh-pet-launch:hover:not(:disabled){transform:translateY(-1px);box-shadow:0 6px 16px rgba(74,159,194,.42)}
+.fh-pet-launch:disabled{opacity:.5;cursor:default}
+.fh-pet-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(112px,1fr));gap:7px}
+.fh-pet-btn{border:1px solid var(--fh-border);border-radius:10px;padding:9px 8px;cursor:pointer;background:var(--fh-raised);color:var(--fh-text);font-size:11.5px;text-align:center;font-family:inherit;transition:border-color .16s,transform .16s,box-shadow .16s}
+.fh-pet-btn:hover:not(:disabled){border-color:var(--fh-accent-line);transform:translateY(-1px);box-shadow:0 3px 9px rgba(70,110,190,.14)}
+.fh-pet-btn:disabled{opacity:.45;cursor:default;transform:none}
+.fh-pet-btn b{display:block;font-size:15px;margin-bottom:3px}
 
-/* ── v0.20.0 2D 像素小屋 + Live2D 桌宠桥接 ── */
-.fh-pixel{position:relative;height:380px;border-radius:14px;overflow:hidden;background:#E4EDF3;box-shadow:0 6px 20px rgba(20,30,60,.16);cursor:pointer;touch-action:none;isolation:isolate}
+/* 像素形象（保留逻辑资源，当前不作为独立 Tab 呈现） */
+.fh-scene-wrap{position:relative}
+.fh-pixel{position:relative;height:380px;border-radius:var(--fh-r-md);overflow:hidden;background:#E4EDF3;box-shadow:0 6px 20px rgba(20,30,60,.16);cursor:pointer;touch-action:none;isolation:isolate}
 .fh-pixel:active{cursor:grabbing}
 .fh-pixel canvas{display:block;width:100%;height:100%;image-rendering:pixelated;image-rendering:crisp-edges}
 .fh-pixel-hud{position:absolute;left:9px;top:9px;z-index:4;display:flex;gap:5px;flex-wrap:wrap;pointer-events:none}
 .fh-pixel-hud span{font-size:10.5px;padding:3px 8px;border-radius:999px;background:rgba(28,40,64,.66);color:#EAF2FF;backdrop-filter:blur(4px);font-variant-numeric:tabular-nums}
-.fh-pixel-say{position:absolute;left:50%;bottom:56px;transform:translateX(-50%);z-index:5;max-width:78%;padding:7px 12px;border-radius:11px;
-  background:rgba(20,28,48,.86);color:#F3F7FF;font-size:12px;line-height:1.5;text-align:center;box-shadow:0 6px 18px rgba(10,16,32,.4);pointer-events:none;
-  animation:fhPop .4s ease both}
+.fh-pixel-say{position:absolute;left:50%;bottom:56px;transform:translateX(-50%);z-index:5;max-width:78%;padding:7px 12px;border-radius:11px;background:rgba(20,28,48,.86);color:#F3F7FF;font-size:12px;line-height:1.5;text-align:center;box-shadow:0 6px 18px rgba(10,16,32,.4);pointer-events:none;animation:fhPop .4s ease both}
 .fh-pixel-tip{position:absolute;right:9px;bottom:9px;z-index:4;font-size:10px;color:rgba(234,242,255,.75);pointer-events:none;text-shadow:0 1px 2px rgba(0,0,0,.5)}
 .fh-pixel-prop{position:absolute;z-index:3;pointer-events:none;font-size:22px;filter:drop-shadow(0 2px 3px rgba(0,0,0,.4));transition:left .6s,top .6s}
+.fh-yard-scene{position:relative;width:100%;aspect-ratio:3/2;overflow:hidden;border-radius:8px;box-sizing:border-box;background:#839477;touch-action:manipulation;isolation:isolate;border:2px solid #7D887A}
+.fh-yard-scene canvas{display:block;width:100%;height:100%;image-rendering:pixelated;image-rendering:crisp-edges}
+.fh-yard-plot-hit{position:absolute;width:12.5%;height:15%;transform:translate(-50%,-50%);border:0;padding:0;background:transparent;cursor:pointer;border-radius:0}
+.fh-yard-plot-hit[data-ready="true"]::after{content:'';position:absolute;right:13%;top:15%;width:6px;height:6px;background:#E8C46A;box-shadow:0 0 0 2px rgba(66,54,38,.5)}
+.fh-shop{display:grid;grid-template-columns:repeat(auto-fill,minmax(104px,1fr));gap:7px}
+.fh-shop-item{border:1px solid var(--fh-border);border-radius:10px;padding:7px 8px;display:flex;align-items:center;gap:6px;cursor:pointer;background:var(--fh-raised);font-size:11.5px;color:var(--fh-text);font-family:inherit;text-align:left;width:100%;box-sizing:border-box}
+.fh-shop-item[data-sel="true"]{border-color:var(--fh-accent-line);box-shadow:0 0 0 1px var(--fh-accent-line) inset}
+.fh-bag{display:flex;gap:6px;flex-wrap:wrap;font-size:11.5px}
+.fh-bag span{padding:3px 8px;border-radius:999px;background:var(--fh-accent-soft)}
 
-/* Live2D 桌宠桥接卡片 */
-.fh-pet-hero{display:flex;align-items:center;gap:13px;padding:15px;border-radius:14px;
-  background:linear-gradient(135deg,rgba(90,130,220,.16),rgba(150,110,200,.12));border:.5px solid rgba(120,150,220,.28)}
-.fh-pet-orb{width:52px;height:52px;border-radius:50%;flex:none;display:grid;place-items:center;font-size:26px;
-  background:radial-gradient(circle at 35% 30%,#EAF4FF,#8FB6E8 65%,#5B7FD4);box-shadow:0 4px 14px rgba(70,110,190,.32),0 0 0 3px rgba(255,255,255,.28) inset}
-.fh-pet-orb[data-on="false"]{filter:grayscale(.85);opacity:.65;box-shadow:none}
-.fh-pet-title{font-size:13.5px;font-weight:600}
-.fh-pet-sub{font-size:11.5px;opacity:.75;margin-top:3px;line-height:1.5}
-.fh-pet-dot{display:inline-block;width:7px;height:7px;border-radius:50%;margin-right:5px}
-.fh-pet-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(112px,1fr));gap:7px}
-.fh-pet-btn{border:.5px solid var(--dsw-alias-border-l2,rgba(127,127,127,.3));border-radius:10px;padding:9px 8px;cursor:pointer;
-  background:var(--dsw-alias-bg-elevated,rgba(255,255,255,.55));color:inherit;font-size:11.5px;text-align:center;transition:all .16s}
-.fh-pet-btn:hover{border-color:#5B7FD4;transform:translateY(-1px);box-shadow:0 3px 9px rgba(70,110,190,.16)}
-.fh-pet-btn:disabled{opacity:.45;cursor:default;transform:none}
-.fh-pet-btn b{display:block;font-size:15px;margin-bottom:3px}
-.fh-input{border:.5px solid var(--dsw-alias-border-l2,rgba(127,127,127,.3));border-radius:9px;padding:7px 10px;
-  background:var(--dsw-alias-bg-elevated,#fff);color:inherit;font-size:12px;width:100%;box-sizing:border-box;font-family:inherit}
-.fh-chip:focus-visible,.fh-tab:focus-visible,.fh-ghost:focus-visible,.fh-select:focus-visible,.fh-input:focus-visible,.fh-shop-item:focus-visible,.fh-pet-btn:focus-visible{outline:2px solid var(--dsw-alias-accent-primary,#4a9fc2);outline-offset:2px}
+@keyframes fhPop{from{opacity:0;transform:translateY(6px) scale(.97)}to{opacity:1;transform:none}}
 @media (prefers-reduced-motion: reduce){.fh-shell *,.fh-shell *::before,.fh-shell *::after{animation-duration:.01ms !important;animation-iteration-count:1 !important;transition-duration:.01ms !important}.fh-pixel-say{animation:none !important}}
 @media (max-width:680px){
 .fh-head,.fh-tabs{margin-left:12px;margin-right:12px}
@@ -458,8 +474,10 @@ window.__ModuleLoader__.load({
 .fh-vitals{grid-template-columns:repeat(2,minmax(0,1fr))}
 .fh-gallery{grid-template-columns:1fr}
 .fh-pet-grid{grid-template-columns:repeat(2,minmax(0,1fr))}
-}
-`
+.fh-star-stage{height:360px}
+.fh-pet-hero{flex-wrap:wrap}
+.fh-pet-launch{width:100%}
+}`
 
     function ensureHomeStyle() {
       if (typeof document === 'undefined' || !document.getElementById) return
@@ -502,7 +520,8 @@ window.__ModuleLoader__.load({
     }
     const CROP_NAMES = Object.fromEntries(Object.entries(CROP_META).map(([k, v]) => [k, v.name]))
 
-    // 画作：只存 seed，用确定性伪随机在浏览器里画出来（不联网、不存图片）。
+    // 画作：seed 决定构图，PALETTES 只是旧作的配色键；未知配色按字符串散列出独特色板。
+    // 没有任何"必须画什么"的约束——构图类型、元素、数量、位置、笔触全由 seed 决定。
     function artRng(seed) {
       let a = seed >>> 0
       return function () {
@@ -513,43 +532,93 @@ window.__ModuleLoader__.load({
         return ((t ^ (t >>> 14)) >>> 0) / 4294967296
       }
     }
+    function hashColors(name) {
+      let h = 2166136261
+      for (let i = 0; i < name.length; i++) { h ^= name.charCodeAt(i); h = Math.imul(h, 16777619) }
+      const r = artRng(h >>> 0)
+      const hue = Math.floor(r() * 360)
+      const sat = 40 + Math.floor(r() * 40)
+      const hsl = (hh, ss, ll) => `hsl(${(hh + 360) % 360} ${ss}% ${ll}%)`
+      return [hsl(hue, sat, 82), hsl(hue + 22, sat, 62), hsl(hue + 45, sat + 6, 36), hsl(hue + 8, 26, 96)]
+    }
+    function paletteColors(key) {
+      const p = PALETTES[key]
+      return p ? p.colors : hashColors(String(key || 'free'))
+    }
     function paintingSvg(p) {
-      const pal = PALETTES[p.palette] || PALETTES.sea
-      const c = pal.colors
-      const r = artRng(p.seed)
+      const c = paletteColors(p.palette)
+      const r = artRng((p.seed || 1) + (((p.at || 0) / 1000) | 0))
       const W = 200, H = 140
       const parts = []
-      parts.push('<rect width="' + W + '" height="' + H + '" fill="' + c[3] + '"/>')
-      // 天空/水色分层
-      const horizon = 52 + Math.floor(r() * 46)
-      parts.push('<rect y="' + horizon + '" width="' + W + '" height="' + (H - horizon) + '" fill="' + c[0] + '"/>')
-      parts.push('<rect y="' + (horizon + 24) + '" width="' + W + '" height="' + (H - horizon - 24) + '" fill="' + c[1] + '" opacity=".85"/>')
-      // 太阳 / 月亮
-      const sx = 24 + r() * (W - 48), sy = 16 + r() * Math.max(10, horizon - 32), sr = 8 + r() * 14
-      parts.push('<circle cx="' + sx.toFixed(1) + '" cy="' + sy.toFixed(1) + '" r="' + sr.toFixed(1) + '" fill="' + c[1] + '" opacity=".9"/>')
-      // 波浪
-      const waves = 2 + Math.floor(r() * 3)
-      for (let i = 0; i < waves; i++) {
-        const y = horizon + 10 + i * (12 + r() * 12)
-        const amp = 3 + r() * 7
-        parts.push('<path d="M0 ' + y.toFixed(1) + 'Q' + (W * 0.25).toFixed(0) + ' ' + (y - amp).toFixed(1) + ' ' + (W * 0.5).toFixed(0) + ' ' + y.toFixed(1)
-          + 'T' + W + ' ' + y.toFixed(1) + '" stroke="' + c[2] + '" stroke-width="' + (1 + r() * 1.6).toFixed(1) + '" fill="none" opacity="' + (0.25 + r() * 0.35).toFixed(2) + '"/>')
+      const pick = (arr) => arr[Math.floor(r() * arr.length)]
+      const num = (a, b) => a + r() * (b - a)
+      const f = (n) => Number(n).toFixed(1)
+      const bg = pick(c)
+      parts.push('<rect width="' + W + '" height="' + H + '" fill="' + bg + '"/>')
+      // 构图从 8 种里按 seed 选，每种内部参数都随机；没有固定海景模板。
+      const plan = Math.floor(r() * 8)
+      if (plan === 0) { // 层叠色块
+        const n = 2 + Math.floor(r() * 4)
+        for (let i = 0; i < n; i++) {
+          const y = num(8, H - 18), h = num(10, 56)
+          parts.push('<rect x="' + f(num(-8, 30)) + '" y="' + f(y) + '" width="' + f(num(W * .5, W + 20)) + '" height="' + f(h)
+            + '" rx="' + f(num(0, 16)) + '" fill="' + pick(c) + '" opacity="' + f(num(.3, .85)) + '"/>')
+        }
+      } else if (plan === 1) { // 圆形天体 / 泡泡群
+        const n = 2 + Math.floor(r() * 6)
+        for (let i = 0; i < n; i++) {
+          parts.push('<circle cx="' + f(num(12, W - 12)) + '" cy="' + f(num(12, H - 12)) + '" r="' + f(num(5, 30))
+            + '" fill="' + pick(c) + '" opacity="' + f(num(.35, .9)) + '"/>')
+        }
+      } else if (plan === 2) { // 曲线山峦 / 波浪
+        const layers = 2 + Math.floor(r() * 3)
+        for (let i = 0; i < layers; i++) {
+          const y = 34 + i * (H / (layers + 1)) + num(-12, 12)
+          parts.push('<path d="M0 ' + f(y) + 'Q' + f(W * .3) + ' ' + f(y - num(6, 40)) + ' ' + f(W * .6) + ' ' + f(y + num(-12, 16))
+            + 'T' + W + ' ' + f(y + num(-16, 16)) + 'V' + H + 'H0Z" fill="' + pick(c) + '" opacity="' + f(num(.4, .9)) + '"/>')
+        }
+      } else if (plan === 3) { // 几何拼接
+        const n = 3 + Math.floor(r() * 5)
+        for (let i = 0; i < n; i++) {
+          const x = num(0, W), y = num(0, H), s = num(14, 60)
+          parts.push('<rect x="' + f(x) + '" y="' + f(y) + '" width="' + f(s) + '" height="' + f(s * num(.4, 1.6))
+            + '" rx="' + f(num(0, 8)) + '" fill="' + pick(c) + '" opacity="' + f(num(.35, .8))
+            + '" transform="rotate(' + f(num(-35, 35)) + ' ' + f(x) + ' ' + f(y) + ')"/>')
+        }
+      } else if (plan === 4) { // 树 / 枝干剪影
+        const base = num(H * .6, H - 8), x = num(30, W - 30)
+        parts.push('<path d="M' + f(x) + ' ' + H + 'L' + f(x) + ' ' + f(base) + '" stroke="' + c[2] + '" stroke-width="' + f(num(2, 6)) + '"/>')
+        for (let i = 0; i < 6; i++) {
+          parts.push('<circle cx="' + f(x + num(-46, 46)) + '" cy="' + f(base - num(0, 40)) + '" r="' + f(num(8, 26))
+            + '" fill="' + pick(c) + '" opacity="' + f(num(.45, .9)) + '"/>')
+        }
+      } else if (plan === 5) { // 一尾鱼 / 鸟 / 抽象生物
+        const x = num(40, W - 60), y = num(30, H - 30), s = num(.7, 1.8)
+        parts.push('<path d="M' + f(x) + ' ' + f(y) + 'q' + f(20 * s) + ' ' + f(-12 * s) + ' ' + f(38 * s) + ' 0q' + f(-20 * s) + ' ' + f(12 * s) + ' ' + f(-38 * s) + ' 0z" fill="' + c[2] + '" opacity=".85"/>'
+          + '<path d="M' + f(x + 38 * s) + ' ' + f(y) + 'l' + f(12 * s) + ' ' + f(-9 * s) + 'v' + f(18 * s) + 'z" fill="' + c[2] + '" opacity=".8"/>')
+        for (let i = 0; i < 3; i++) parts.push('<circle cx="' + f(num(10, W - 10)) + '" cy="' + f(num(10, H - 10)) + '" r="' + f(num(1, 4)) + '" fill="' + c[3] + '"/>')
+      } else if (plan === 6) { // 星点 / 网格
+        const n = 12 + Math.floor(r() * 20)
+        for (let i = 0; i < n; i++) {
+          parts.push('<circle cx="' + f(num(4, W - 4)) + '" cy="' + f(num(4, H - 4)) + '" r="' + f(num(.6, 3.4))
+            + '" fill="' + pick(c) + '" opacity="' + f(num(.3, 1)) + '"/>')
+        }
+        if (r() > .5) parts.push('<path d="M' + f(num(10, 60)) + ' ' + f(num(10, 40)) + 'L' + f(num(W - 60, W - 10)) + ' ' + f(num(H - 40, H - 10))
+          + '" stroke="' + c[3] + '" stroke-width="' + f(num(.5, 1.6)) + '" opacity=".5"/>')
+      } else { // 光束 / 放射
+        const cx = num(30, W - 30), cy = num(20, H - 20)
+        for (let i = 0; i < 8; i++) {
+          const a = (Math.PI * 2 * i) / 8 + num(-.2, .2)
+          parts.push('<path d="M' + f(cx) + ' ' + f(cy) + 'L' + f(cx + Math.cos(a) * W) + ' ' + f(cy + Math.sin(a) * W)
+            + '" stroke="' + pick(c) + '" stroke-width="' + f(num(3, 18)) + '" opacity="' + f(num(.15, .5)) + '"/>')
+        }
       }
-      // 一条小鱼 / 一个岛
-      if (r() > 0.45) {
-        const fx = 20 + r() * (W - 70), fy = horizon - 14 - r() * 18
-        parts.push('<path d="M' + fx.toFixed(1) + ' ' + fy.toFixed(1) + 'q12 -7 22 0q-12 7 -22 0z" fill="' + c[2] + '" opacity=".8"/>'
-          + '<path d="M' + (fx + 22).toFixed(1) + ' ' + fy.toFixed(1) + 'l7 -5v10z" fill="' + c[2] + '" opacity=".8"/>')
-      } else {
-        const ix = 30 + r() * (W - 90)
-        parts.push('<path d="M' + ix.toFixed(1) + ' ' + (horizon + 2) + 'q22 -18 44 0z" fill="' + c[2] + '" opacity=".55"/>')
+      // 统一的轻微肌理：几笔散点，让同类构图也不完全一样。
+      for (let i = 0; i < 5; i++) {
+        parts.push('<circle cx="' + f(num(0, W)) + '" cy="' + f(num(0, H)) + '" r="' + f(num(.5, 2.2))
+          + '" fill="' + c[3] + '" opacity="' + f(num(.25, .7)) + '"/>')
       }
-      // 星星
-      for (let i = 0; i < 4; i++) {
-        parts.push('<circle cx="' + (r() * W).toFixed(1) + '" cy="' + (r() * Math.max(8, horizon - 6)).toFixed(1)
-          + '" r="' + (0.8 + r() * 1.6).toFixed(1) + '" fill="' + c[3] + '" opacity=".9"/>')
-      }
-      return '<svg viewBox="0 0 ' + W + ' ' + H + '" preserveAspectRatio="none">' + parts.join('') + '</svg>'
+      return '<svg viewBox="0 0 ' + W + ' ' + H + '" preserveAspectRatio="xMidYMid slice">' + parts.join('') + '</svg>'
     }
 
     function VitalBar({ k, v, label, icon }) {
@@ -573,42 +642,159 @@ window.__ModuleLoader__.load({
       }))
     }
 
+    // 3D 立体星图：canvas 做透视投影，拖拽旋转 / 滚轮缩放 / 悬浮查看节点。
+    // 后端 laidOut 提供 x/y/z（z 由 id 稳定 hash 得到），这里绕 Y/X 轴旋转后投影。
     function StarMap({ map }) {
-      const laid = map.laidOut || []
-      const nodes = new Map(laid.map(n => [n.id, n]))
-      const W = 640, H = 380
-      const edges = (map.edges || []).filter(e => nodes.has(e.a) && nodes.has(e.b))
+      const canvasRef = React.useRef(null)
+      const stateRef = React.useRef({ yaw: 0, pitch: -0.18, zoom: 1, dragging: false, lx: 0, ly: 0, hover: null })
+      const [hover, setHover] = React.useState(null)
+      const nodes = map.laidOut || []
+      const edges = (map.edges || []).filter(e => nodes.some(n => n.id === e.a) && nodes.some(n => n.id === e.b))
+      const byId = new Map(nodes.map(n => [n.id, n]))
+
+      React.useEffect(() => {
+        const canvas = canvasRef.current
+        if (!canvas) return
+        const ctx = canvas.getContext('2d')
+        const st = stateRef.current
+        let raf = 0
+        const motion = typeof window !== 'undefined' && window.matchMedia ? window.matchMedia('(prefers-reduced-motion: reduce)') : null
+
+        const resize = () => {
+          const dpr = Math.min(2, (typeof window !== 'undefined' && window.devicePixelRatio) || 1)
+          const rect = canvas.getBoundingClientRect()
+          canvas.width = Math.max(1, Math.round(rect.width * dpr))
+          canvas.height = Math.max(1, Math.round(rect.height * dpr))
+          ctx.setTransform(dpr, 0, 0, dpr, 0, 0)
+        }
+        const project = (n, w, h) => {
+          const cx = 320, cy = 180
+          const dx = n.x - cx, dy = n.y - cy, dz = n.z || 0
+          const cosY = Math.cos(st.yaw), sinY = Math.sin(st.yaw)
+          const x1 = dx * cosY + dz * sinY
+          const z1 = -dx * sinY + dz * cosY
+          const cosX = Math.cos(st.pitch), sinX = Math.sin(st.pitch)
+          const y1 = dy * cosX - z1 * sinX
+          const z2 = dy * sinX + z1 * cosX
+          const depth = 620 + z2
+          const scale = st.zoom * (620 / Math.max(160, depth))
+          return { x: w / 2 + x1 * scale, y: h / 2 + y1 * scale, s: scale, depth }
+        }
+        const draw = () => {
+          raf = 0
+          const rect = canvas.getBoundingClientRect()
+          const w = rect.width, h = rect.height
+          if (!w || !h) return
+          ctx.clearRect(0, 0, w, h)
+          const pts = nodes.map(n => ({ n, ...project(n, w, h) }))
+          const sorted = pts.slice().sort((a, b) => b.depth - a.depth)
+          // 连线：远的先画，近的覆盖在上面。
+          for (const e of edges) {
+            const a = pts.find(p => p.n.id === e.a), b = pts.find(p => p.n.id === e.b)
+            if (!a || !b) continue
+            const front = (a.depth + b.depth) / 2 < 620
+            ctx.beginPath()
+            ctx.moveTo(a.x, a.y)
+            const mx = (a.x + b.x) / 2, my = (a.y + b.y) / 2 - 10 * Math.min(1.4, a.s)
+            ctx.quadraticCurveTo(mx, my, b.x, b.y)
+            ctx.strokeStyle = e.type === 'topic'
+              ? (front ? 'rgba(240,196,110,.62)' : 'rgba(240,196,110,.22)')
+              : (front ? 'rgba(190,214,255,.34)' : 'rgba(190,214,255,.12)')
+            ctx.lineWidth = (e.type === 'topic' ? 1.5 : .8) * Math.min(1.3, a.s)
+            ctx.stroke()
+          }
+          // 节点：带景深的发光球，前面更大更亮；悬浮节点高亮。
+          for (const p of sorted) {
+            const imp = p.n.importance ?? .5
+            const radius = Math.max(2.4, Math.min(24, (4 + imp * 9) * p.s))
+            const near = p.depth < 620
+            const color = p.n.color || '#7FB2EF'
+            ctx.beginPath()
+            ctx.arc(p.x, p.y, radius, 0, Math.PI * 2)
+            ctx.fillStyle = color
+            ctx.globalAlpha = (p.n.kind === 'conclusion' ? .96 : .82) * (near ? 1 : .55)
+            ctx.shadowColor = color
+            ctx.shadowBlur = (st.hover === p.n.id ? 20 : near ? 12 : 5)
+            ctx.fill()
+            ctx.shadowBlur = 0
+            ctx.globalAlpha = 1
+            if (st.hover === p.n.id) {
+              ctx.beginPath(); ctx.arc(p.x, p.y, radius + 4, 0, Math.PI * 2)
+              ctx.strokeStyle = 'rgba(255,255,255,.85)'; ctx.lineWidth = 1.4; ctx.stroke()
+            }
+            if (imp > .78 && radius > 6) {
+              ctx.fillStyle = 'rgba(235,242,255,.82)'; ctx.font = '10px system-ui, sans-serif'
+              ctx.fillText(String(p.n.label).slice(0, 10), p.x + radius + 5, p.y + 3)
+            }
+          }
+        }
+        const schedule = () => { if (!raf) raf = requestAnimationFrame(draw) }
+        const hit = (e) => {
+          const rect = canvas.getBoundingClientRect()
+          const x = e.clientX - rect.left, y = e.clientY - rect.top
+          let best = null, bd = 1e9
+          for (const n of nodes) {
+            const p = project(n, rect.width, rect.height)
+            const d = Math.hypot(p.x - x, p.y - y)
+            if (d < Math.max(9, (4 + (n.importance ?? .5) * 9) * p.s) && d < bd) { bd = d; best = n }
+          }
+          return best
+        }
+        const onDown = (e) => { st.dragging = true; st.lx = e.clientX; st.ly = e.clientY; canvas.setPointerCapture?.(e.pointerId) }
+        const onMove = (e) => {
+          if (st.dragging) {
+            st.yaw += (e.clientX - st.lx) * .008
+            st.pitch = Math.max(-1.2, Math.min(1.2, st.pitch + (e.clientY - st.ly) * .006))
+            st.lx = e.clientX; st.ly = e.clientY
+            schedule()
+          } else {
+            const n = hit(e)
+            const id = n ? n.id : null
+            if (id !== st.hover) { st.hover = id; setHover(n || null); schedule() }
+          }
+        }
+        const onUp = (e) => { st.dragging = false; try { canvas.releasePointerCapture?.(e.pointerId) } catch {} }
+        const onWheel = (e) => {
+          e.preventDefault()
+          st.zoom = Math.max(.45, Math.min(2.6, st.zoom * (e.deltaY > 0 ? .92 : 1.08)))
+          schedule()
+        }
+        resize(); schedule()
+        const ro = typeof ResizeObserver !== 'undefined' ? new ResizeObserver(() => { resize(); schedule() }) : null
+        if (ro) ro.observe(canvas)
+        canvas.addEventListener('pointerdown', onDown)
+        canvas.addEventListener('pointermove', onMove)
+        canvas.addEventListener('pointerup', onUp)
+        canvas.addEventListener('pointercancel', onUp)
+        canvas.addEventListener('wheel', onWheel, { passive: false })
+        return () => {
+          if (raf) cancelAnimationFrame(raf)
+          if (ro) ro.disconnect()
+          canvas.removeEventListener('pointerdown', onDown)
+          canvas.removeEventListener('pointermove', onMove)
+          canvas.removeEventListener('pointerup', onUp)
+          canvas.removeEventListener('pointercancel', onUp)
+          canvas.removeEventListener('wheel', onWheel)
+        }
+      }, [nodes, edges])
+
       return h('div', null,
-        h('style', null, '.fh-node:hover circle{filter:drop-shadow(0 0 6px #fff)}'),
-        h('svg', { className: 'fh-star', viewBox: '0 0 ' + W + ' ' + H, preserveAspectRatio: 'xMidYMid meet' },
-          h('defs', null,
-            h('radialGradient', { id: 'fhNebula' },
-              h('stop', { offset: '0', stopColor: '#3E4E86', stopOpacity: '.55' }),
-              h('stop', { offset: '1', stopColor: '#0B1020', stopOpacity: '0' }))),
-          h('ellipse', { cx: W / 2, cy: H / 2, rx: W * 0.46, ry: H * 0.44, fill: 'url(#fhNebula)' }),
-          edges.map((e, i) => {
-            const a = nodes.get(e.a), b = nodes.get(e.b)
-            const midX = (a.x + b.x) / 2, midY = (a.y + b.y) / 2 - 16
-            return h('path', { key: 'e' + i,
-              d: 'M' + a.x + ' ' + a.y + 'Q' + midX + ' ' + midY + ' ' + b.x + ' ' + b.y,
-              fill: 'none',
-              stroke: e.type === 'topic' ? 'rgba(240,196,110,.65)' : 'rgba(190,214,255,.28)',
-              'stroke-width': e.type === 'topic' ? 1.4 : 0.7,
-              'stroke-dasharray': e.type === 'topic' ? '' : '3 4' })
-          }),
-          laid.map(n => h('g', { key: n.id, className: 'fh-node' },
-            h('circle', { cx: n.x, cy: n.y, r: 5 + (n.importance || 0.5) * 7,
-              fill: n.color || '#7FB2EF', opacity: n.kind === 'conclusion' ? 0.95 : 0.8,
-              filter: 'drop-shadow(0 0 5px ' + (n.color || '#7FB2EF') + ')' },
-              h('title', null, n.label + '（' + n.kind + '）')),
-            (n.importance || 0) > 0.72 ? h('text', { x: n.x + 9, y: n.y + 4, fill: 'rgba(235,242,255,.8)', 'font-size': 10 },
-              String(n.label).slice(0, 12)) : null))),
+        h('div', { className: 'fh-star-stage' },
+          h('canvas', { ref: canvasRef, 'aria-label': '三维记忆星图，拖动旋转，滚轮缩放' }),
+          h('div', { className: 'fh-star-hud' },
+            h('span', null, '3D 星域 · ' + nodes.length + ' 个节点'),
+            h('span', null, edges.length + ' 条连线')),
+          hover ? h('div', { className: 'fh-star-detail' },
+            h('b', null, hover.label),
+            h('div', null, '重要度 ' + Math.round((hover.importance || 0) * 100) + '% · ' + (hover.kind || '记忆'))
+          ) : null,
+          h('div', { className: 'fh-star-tip' }, '拖动 <b>旋转</b> · 滚轮 <b>缩放</b> · 悬浮 <b>查看</b>')),
         h('div', { className: 'fh-legend' },
           h('span', null, h('i', { className: 'fh-dot', style: { background: '#F0C46E' } }), '话题共现'),
           h('span', null, h('i', { className: 'fh-dot', style: { background: '#7FB2EF' } }), '记忆节点'),
           h('span', null, h('i', { className: 'fh-dot', style: { background: '#534AB7' } }), '长期结论')),
         h('div', { className: 'fh-msg', style: { marginTop: 6 } },
-          laid.length ? '共 ' + laid.length + ' 个节点 · ' + edges.length + ' 条连线（越亮越重要）' : '还没有记忆节点，多陪它聊聊吧。'))
+          nodes.length ? '越靠近中心、越亮的记忆越重要。' : '还没有记忆节点，多陪它聊聊吧。'))
     }
 
     // ── v0.21.0 2D 像素小屋：真正使用 cabin-world（VADS, CC BY 4.0）的烘焙房间素材 ──
@@ -1703,17 +1889,15 @@ window.__ModuleLoader__.load({
       ensureHomeStyle()
       const [snap, setSnap] = React.useState(null)
       const [map, setMap] = React.useState(null)
-      const [tab, setTab] = React.useState('daily')
+      const [tab, setTab] = React.useState('gallery')
       const [msg, setMsg] = React.useState('')
       const [busy, setBusy] = React.useState(false)
-      const [selCrop, setSelCrop] = React.useState('kelp')
-      const [selRecipe, setSelRecipe] = React.useState('porridge')
       // Live2D 桌宠桥接
       const [pet, setPet] = React.useState(null)
       const [petTextInput, setPetTextInput] = React.useState('')
       const [petCatalog, setPetCatalog] = React.useState(null)
       const [petEvents, setPetEvents] = React.useState([])
-      // 共享临场意图：桌宠与像素形象表现同一状态（短轮询，过期自动消失）
+      // 共享临场意图：3 秒轮询（过期后端返回 null）
       const [presence, setPresence] = React.useState(null)
       const [presenceExpression, setPresenceExpression] = React.useState('')
       const shellRef = React.useRef(null)
@@ -1726,14 +1910,8 @@ window.__ModuleLoader__.load({
           el.style.height = parent.clientHeight + 'px'
         }
         const observer = new ResizeObserver(fitParent)
-        if (parent) {
-          fitParent()
-          observer.observe(parent)
-        }
-        return () => {
-          observer.disconnect()
-          el.style.height = ''
-        }
+        if (parent) { fitParent(); observer.observe(parent) }
+        return () => { observer.disconnect(); el.style.height = '' }
       }, [])
       const petApi = (path, method, body) => homeApi('/api/companion-fishgirl/pet' + path, method, body)
       const petRefresh = () => petApi('', 'GET').then(setPet).catch(e => setPet({ connected: false, error: String(e && e.message || e) }))
@@ -1741,7 +1919,6 @@ window.__ModuleLoader__.load({
         .then(r => setPetCatalog(r.catalog || null)).catch(() => {})
       const petLoadEvents = () => petApi('?view=events&after=0', 'GET')
         .then(r => setPetEvents((r.events || []).slice(-8).reverse())).catch(() => {})
-      // 共享临场意图：3 秒轮询（比 15 秒有效期短，过期后端会返回 null）。
       const loadPresence = () => petApi('?view=presence', 'GET')
         .then(r => setPresence(r && r.presence || null)).catch(() => {})
       useEffect(() => {
@@ -1755,6 +1932,27 @@ window.__ModuleLoader__.load({
         }, 3000)
         return () => clearInterval(timer)
       }, [])
+      // 一键启动桌宠：拉起本机进程后轮询等待连接（最多约 15 秒）。
+      const launchPet = () => {
+        if (busy) return
+        setBusy(true); setMsg('正在启动桌宠…')
+        return petApi('', 'POST', { action: 'launch' })
+          .then(r => {
+            setMsg(r.message || '桌宠正在启动…')
+            if (r.started || r.alreadyRunning) {
+              let tries = 0
+              const timer = setInterval(() => {
+                tries++
+                void petRefresh().then(p => {
+                  if (p && p.connected) { clearInterval(timer); setMsg('桌宠已连接。'); void petLoadCatalog() }
+                  else if (tries >= 12) { clearInterval(timer); setMsg('桌宠启动较慢，请稍后点「刷新」。') }
+                })
+              }, 1200)
+            }
+          })
+          .catch(e => setMsg('启动失败：' + String(e && e.message || e)))
+          .finally(() => setBusy(false))
+      }
       const petDo = (action, args) => {
         if (busy) return
         setBusy(true); setMsg('')
@@ -1763,7 +1961,6 @@ window.__ModuleLoader__.load({
           .catch(e => setMsg(String(e && e.message || e)))
           .finally(() => setBusy(false))
       }
-      // 一键开启桌宠桥接：写 petBridgeEnabled=true，即时生效无需重启 dsh。
       const enableBridge = () => {
         if (busy) return
         setBusy(true); setMsg('')
@@ -1773,14 +1970,12 @@ window.__ModuleLoader__.load({
           .catch(e => setMsg('开启失败：' + String(e && e.message || e)))
           .finally(() => setBusy(false))
       }
-
       const reload = (silent) => Promise.all([
         homeApi('/api/companion-fishgirl/home', 'GET').then(s => { if (s && s.enabled !== false) setSnap(s) }),
         homeApi('/api/companion-fishgirl/starmap', 'GET').then(setMap),
       ]).catch(e => { if (!silent) setMsg(String(e && e.message || e)) })
       useEffect(() => {
         void reload()
-        // 20 秒轮询：她在屋里自己过日子，画面和数值要跟得上（页面隐藏时跳过）。
         const timer = setInterval(() => {
           if (typeof document !== 'undefined' && document.hidden) return
           void reload(true)
@@ -1799,109 +1994,79 @@ window.__ModuleLoader__.load({
           .catch(e => setMsg(String(e && e.message || e)))
           .finally(() => setBusy(false))
       }
-      const chip = (label, onClick, disabled) => h('button', {
-        key: label, className: 'fh-chip', disabled: !!disabled, onClick }, label)
+      const chip = (label, onClick, disabled, tone) => h('button', {
+        key: label, className: 'fh-chip', 'data-tone': tone || undefined, disabled: !!disabled, onClick }, label)
       const title = (text, right) => h('div', { className: 'fh-panel-title' },
         h('span', null, text),
-        right ? h('span', { style: { fontWeight: 400, opacity: .65 } }, right) : null)
-      const tabs = [['daily', '此刻'], ['garden', '院子'], ['gallery', '画册'], ['star', '星图'], ['pet', 'Live2D 桌宠']]
+        right ? h('span', null, right) : null)
+      const tabs = [['gallery', '画册'], ['diary', '日记'], ['star', '星图'], ['pet', 'Live2D 桌宠']]
 
       const currentView = h(React.Fragment, null,
 
-        // ── 此刻 ──
-        snap && tab === 'daily' ? h('div', { style: { display: 'flex', flexDirection: 'column', gap: 10 } },
-          h('div', { className: 'fh-scene-wrap' },
-            h(PixelRoom, { snap, act, presence }),
-            ),
-          h('div', { className: 'fh-chips' },
-            chip((snap.autonomy ? '自主生活 · 开' : '自主生活 · 关'), () => act('autonomy', { on: !snap.autonomy }), busy),
-            chip('摸摸头', () => act('pet'), busy || snap.sleeping),
-            chip('递杯茶', () => act('act', { activity: 'tea' }), busy || snap.sleeping),
-            chip('去画一张', () => act('act', { activity: 'draw' }), busy || snap.sleeping),
-            chip('洗个澡', () => act('clean'), busy || snap.sleeping),
-            chip(snap.sleeping ? '叫醒她' : '哄她睡觉', () => act(snap.sleeping ? 'wake' : 'sleep'), busy)),
-          h('div', { className: 'fh-panel' },
-            title('她的状态', '金币 ' + snap.coins + ' · 画册 ' + snap.galleryCount + ' 张'),
-            h('div', { className: 'fh-vitals' }, VITAL_META.map(m =>
-              h(VitalBar, { key: m.k, k: m.k, v: snap.vitals[m.k], label: m.label, icon: m.icon })))),
-          h('div', { className: 'fh-panel' },
-            title('生活流', '她自己挑事做，不是等你点'),
-            h(LifeFeed, { items: snap.lifeLog })))
-        : null,
-
-        // ── 院子 ──
-        snap && tab === 'garden' ? h('div', { style: { display: 'flex', flexDirection: 'column', gap: 10 } },
-          h('div', { className: 'fh-scene-wrap' },
-            h(PixelYard, { snap, act, selCrop, busy, onNotice: setMsg, presence }),
-            ),
-          h('div', { className: 'fh-msg' },
-            '点菜畦播种 · 再点浇水 · 成熟后收获 · 共 ' + (snap.garden || []).filter(c => c && c.ready).length + ' 块可收'),
-          h('div', { className: 'fh-panel' },
-            title('种子铺', '先选一种，再买；买完点空地种下'),
-            h('div', { className: 'fh-shop' }, (snap.crops || []).map(c => h('button', {
-              key: c.id, type: 'button', className: 'fh-shop-item', 'data-sel': selCrop === c.id ? 'true' : 'false',
-              'aria-pressed': selCrop === c.id ? 'true' : 'false',
-              onClick: () => setSelCrop(c.id),
-            },
-              h('span', null, (CROP_META[c.id] || {}).emoji || '🌱'),
-              h('span', { style: { flex: 1 } }, c.name),
-              h('span', { style: { opacity: .6 } }, c.seed + ' 币')))),
-            h('div', { className: 'fh-chips', style: { marginTop: 9 } },
-              chip('买 2 份', () => act('buy', { crop: selCrop, n: 2 }), busy),
-              chip('买 5 份', () => act('buy', { crop: selCrop, n: 5 }), busy),
-              chip('收成熟的 + 补种', () => act('replant', { crop: selCrop }), busy))),
-          h('div', { className: 'fh-panel' },
-            title('背包与厨房', Object.keys(snap.bag || {}).length ? Object.keys(snap.bag).length + ' 种收成' : '空的'),
-            h('div', { className: 'fh-bag' }, Object.keys(snap.bag || {}).length
-              ? Object.entries(snap.bag).map(([k, v]) => h('span', { key: k },
-                ((CROP_META[k] || {}).emoji || '🌱') + ' ' + (CROP_NAMES[k] || k) + ' ×' + v))
-              : h('span', { style: { background: 'transparent', opacity: .7 } }, '还没有收成，先种点什么吧')),
-            h('div', { className: 'fh-chips', style: { marginTop: 9 } },
-              h('select', { className: 'fh-select', value: selRecipe, onChange: e => setSelRecipe(e.target.value) },
-                (snap.recipes || []).map(r => h('option', { key: r.id, value: r.id },
-                  r.name + '（饱腹+' + r.fill + '）'))),
-              chip('做饭', () => act('cook', { recipe: selRecipe }), busy),
-              chip('卖 1 份 ' + (CROP_NAMES[selCrop] || ''), () => act('sell', { crop: selCrop, n: 1 }), busy))))
-        : null,
-
-        // ── 画册 ──
-        snap && tab === 'gallery' ? h('div', { className: 'fh-panel' },
-          title('她的画册', snap.galleryCount + ' 张'),
-          h('div', { className: 'fh-chips', style: { marginBottom: 11 } },
-            chip('让她现在画一张', () => act('act', { activity: 'draw' }), busy || snap.sleeping),
-            chip('随便画一张（不看心情）', () => act('paint', {}), busy)),
-          (snap.gallery || []).length ? h('div', { className: 'fh-gallery' },
+        // ── 画册：她想画什么就画什么，构图随她当刻的心思变化 ──
+        tab === 'gallery' ? h('div', { className: 'fh-panel' },
+          title('她的画册', snap ? snap.galleryCount + ' 张' : ''),
+          h('div', { className: 'fh-chips', style: { marginBottom: 12 } },
+            chip('让她画一张', () => act('act', { activity: 'draw' }), busy || !snap || snap.sleeping, 'accent'),
+            chip('随她自由画', () => act('paint', {}), busy || !snap)),
+          (snap && snap.gallery || []).length ? h('div', { className: 'fh-gallery' },
             snap.gallery.slice().reverse().map(p => h('div', { key: p.id, className: 'fh-art' },
               h('div', { dangerouslySetInnerHTML: { __html: paintingSvg(p) } }),
               h('div', { className: 'fh-art-cap' },
                 h('b', { title: p.title }, p.title),
-                h('i', null, (PALETTES[p.palette] || {}).name || ''),
                 h('i', null, new Date(p.at).toLocaleDateString())))))
-            : h('div', { className: 'fh-empty' }, '画册还空着。她画画时会自己挂上去，也可以让她现在画一张。'))
+            : h('div', { className: 'fh-empty' }, '画册还空着。她想到什么就会画下来。'))
         : null,
 
-        // ── 星图 ──
+        // ── 日记：她自己写，内容由她自己总结 ──
+        tab === 'diary' ? h('div', { className: 'fh-panel' },
+          title('她的日记', snap ? snap.diaryCount + ' 篇' : ''),
+          h('div', { className: 'fh-msg', style: { marginBottom: 10 } },
+            '这是她自己写下的东西。想让她记点什么，直接在对话里说一声就好。'),
+          (snap && snap.diary || []).length ? (() => {
+            const groups = []
+            for (const d of snap.diary.slice().reverse()) {
+              const last = groups[groups.length - 1]
+              if (last && last.date === d.date) last.items.push(d)
+              else groups.push({ date: d.date, items: [d] })
+            }
+            return h('div', { className: 'fh-diary' }, groups.map(g =>
+              h('div', { key: g.date },
+                h('div', { className: 'fh-diary-day' }, g.date),
+                h('div', { className: 'fh-diary', style: { marginTop: 7 } }, g.items.map(d =>
+                  h('div', { key: d.id, className: 'fh-diary-card' },
+                    h('div', { className: 'fh-diary-text' }, d.text),
+                    h('div', { className: 'fh-diary-meta' },
+                      h('span', null, new Date(d.at).toLocaleTimeString('zh-CN', { hour12: false }).slice(0, 5)),
+                      h('span', null, d.by === 'self' ? '她自己写的' : '记下来的'))))))))
+          })()
+            : h('div', { className: 'fh-empty' }, '还没有日记。她会在想写的时候自己动笔。'))
+        : null,
+
+        // ── 星图：3D 立体记忆星域 ──
         tab === 'star' ? h('div', { className: 'fh-panel' },
           title('记忆星图', map ? map.nodes.length + ' 个节点' : ''),
           map ? h(StarMap, { map }) : h('div', { className: 'fh-msg' }, '正在绘制星图…'))
         : null,
 
-        // ── Live2D 桌宠桥接（v0.21：真实表情/动作目录 + 事件流）──
-        tab === 'pet' ? h('div', { style: { display: 'flex', flexDirection: 'column', gap: 10 } },
+        // ── Live2D 桌宠桥接 ──
+        tab === 'pet' ? h('div', { style: { display: 'flex', flexDirection: 'column', gap: 14 } },
           h('div', { className: 'fh-pet-hero' },
             h('div', { className: 'fh-pet-orb', 'data-on': pet && pet.connected ? 'true' : 'false' }, '🐟'),
-            h('div', null,
+            h('div', { className: 'fh-pet-hero-main' },
               h('div', { className: 'fh-pet-title' }, 'Live2D 桌宠'),
               h('div', { className: 'fh-pet-sub' },
                 pet ? h('span', null,
                   h('i', { className: 'fh-pet-dot', style: { background: pet.connected ? '#5FB98A' : '#D96A5B' } }),
                   pet.connected ? (pet.rich ? '已连接 · 大肥鱼真 Live2D' : '已连接 · 旧版桌宠') : (pet.enabled === false ? '桥接未开启' : '未连接'))
                   : '正在检测桌宠…'),
-              h('div', { className: 'fh-pet-sub' }, pet && pet.state ? String(pet.state).slice(0, 120) : '独立桌宠进程，模型由你本机提供'))),
-          pet && pet.enabled === false ? h('div', { className: 'fh-panel', style: { borderColor: 'rgba(91,127,212,.5)' } },
+              h('div', { className: 'fh-pet-sub' }, pet && pet.state ? String(pet.state).slice(0, 120) : '独立桌宠进程，模型由你本机提供')),
+            h('button', { type: 'button', className: 'fh-pet-launch', disabled: busy, onClick: launchPet },
+              pet && pet.connected ? '↻ 重新启动' : '▶ 一键启动桌宠')),
+          pet && pet.enabled === false ? h('div', { className: 'fh-panel', style: { borderColor: 'var(--fh-accent-line)' } },
             h('div', { className: 'fh-msg' }, '桥接还没开启。桌宠已在运行，点下面按钮即可联动（无需重启 dsh）：'),
             h('div', { className: 'fh-chips', style: { marginTop: 8 } },
-              chip('一键开启桥接', enableBridge, busy))) : null,
+              chip('一键开启桥接', enableBridge, busy, 'accent'))) : null,
           pet && pet.error ? h('div', { className: 'fh-panel', style: { borderColor: 'rgba(217,106,91,.5)' } },
             h('div', { className: 'fh-msg' }, pet.error)) : null,
           h('div', { className: 'fh-panel' },
@@ -1909,15 +2074,15 @@ window.__ModuleLoader__.load({
             h('input', { className: 'fh-input', placeholder: '例如：你回来啦～',
               value: petTextInput, onChange: e => setPetTextInput(e.target.value),
               onKeyDown: e => { if (e.key === 'Enter' && petTextInput.trim()) { petDo('say', { text: petTextInput }); setPetTextInput('') } } }),
-            h('div', { className: 'fh-chips', style: { marginTop: 8 } },
-              chip('发送台词', () => { if (petTextInput.trim()) { petDo('say', { text: petTextInput }); setPetTextInput('') } }, busy || !pet?.connected))),
+            h('div', { className: 'fh-chips', style: { marginTop: 9 } },
+              chip('发送台词', () => { if (petTextInput.trim()) { petDo('say', { text: petTextInput }); setPetTextInput('') } }, busy || !pet?.connected, 'accent'))),
           h('div', { className: 'fh-panel' },
-            title('临场意图', '表情 + 台词同时作用于桌宠与像素小屋/院子'),
+            title('临场意图', '表情 + 台词同时作用于桌宠'),
             h('select', { className: 'fh-select', value: presenceExpression, onChange: e => setPresenceExpression(e.target.value) },
               h('option', { value: '' }, '（不带表情）'),
               (petCatalog?.expression || []).map(e => h('option', { key: e.name, value: e.name }, e.name))),
-            h('div', { className: 'fh-chips', style: { marginTop: 8 } },
-              chip('同步到两种形象', () => { petDo('presence', { bubble: petTextInput || '我在这儿呢～', expression: presenceExpression }); void loadPresence() }, busy || !pet?.connected))),
+            h('div', { className: 'fh-chips', style: { marginTop: 9 } },
+              chip('同步过去', () => { petDo('presence', { bubble: petTextInput || '我在这儿呢～', expression: presenceExpression }); void loadPresence() }, busy || !pet?.connected))),
           petCatalog && (petCatalog.expression || []).length ? h('div', { className: 'fh-panel' },
             title('表情', `${petCatalog.expression.length} 个 · 来自你的模型`),
             h('div', { className: 'fh-pet-grid' },
@@ -1949,11 +2114,11 @@ window.__ModuleLoader__.load({
                 h('span', { className: 'fh-feed-x' }, label))
             }))) : null,
           h('div', { className: 'fh-sub', style: { lineHeight: 1.6, padding: '0 2px' } },
-            '桌宠是独立程序（pet/ 目录），加载你本机解压的大肥鱼 Live2D 模型；先双击 pet/start.cmd 启动它，再点上方「一键开启桥接」（或到插件管理页本插件设置卡打开「Live2D 桌宠桥接」）。'
-            + '模型版权与署名见 README。面板里的像素小屋不依赖桌宠，随时可用。'))
+            '桌宠是独立程序，加载你本机解压的大肥鱼 Live2D 模型。点上方「一键启动桌宠」就能直接从 DSH 打开；也可在设置里指定桌宠目录或 api.json 路径。模型版权与署名见 README。'))
         : null,
 
       )
+
       const loading = !snap ? h('div', { className: 'fh-msg' }, '正在读取小窝…') : null
       const status = h('div', { className: 'fh-msg', role: 'status' }, msg)
       return h('div', { className: 'fh-shell', ref: shellRef },

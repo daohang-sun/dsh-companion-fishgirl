@@ -186,7 +186,9 @@ export function buildStarmap({ activities = [], topics = [], stream = [], tiers 
   return { nodes, edges, mode }
 }
 
-/** 星图布局：极坐标散点，越重要越靠近中心（借鉴星域的观感，半径=1-重要度）。 */
+/** 星图布局：3D 球形散点，越重要越靠近中心（借鉴星域的观感，半径=1-重要度）。
+ *  x/y 仍沿用旧布局做水平/垂直基准，z 用 id 的稳定 hash 生成，保证每次打开
+ *  立体结构一致；客户端按 z 做透视投影与景深，支持拖拽旋转。 */
 export function layoutStarmap(map, width = 640, height = 360) {
   const nodes = map.nodes ?? []
   const cx = width / 2, cy = height / 2
@@ -194,6 +196,15 @@ export function layoutStarmap(map, width = 640, height = 360) {
   return nodes.map((n, i) => {
     const angle = (i * 2.399963) % (Math.PI * 2)
     const r = maxR * (1 - 0.7 * (n.importance ?? 0.5)) * (0.5 + 0.5 * ((i % 5) / 4))
-    return { ...n, x: Math.round(cx + Math.cos(angle) * r), y: Math.round(cy + Math.sin(angle) * r) }
+    const id = String(n.id ?? i)
+    let hash = 2166136261
+    for (let k = 0; k < id.length; k++) { hash ^= id.charCodeAt(k); hash = Math.imul(hash, 16777619) }
+    const depth = ((hash >>> 0) / 4294967296) * 2 - 1
+    return {
+      ...n,
+      x: Math.round(cx + Math.cos(angle) * r),
+      y: Math.round(cy + Math.sin(angle) * r),
+      z: Math.round(depth * maxR * 0.8),
+    }
   })
 }
