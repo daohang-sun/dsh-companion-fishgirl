@@ -19,6 +19,13 @@ pet/selftest-result.json
 # 贴图降采样缓存（运行时从用户本机模型派生，绝不可入库/再分发）
 pet/.texcache/
 
+# WebView2 运行时用户数据 / 日志（本机私有，不入库）
+pet/webview2/userdata/
+pet/webview2/host-launch.log
+pet/webview2/__pycache__/
+**/__pycache__/
+*.pyc
+
 # 编辑器与系统文件
 .vscode/
 .idea/

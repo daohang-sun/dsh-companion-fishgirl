@@ -19,17 +19,19 @@ import { Service } from '@deepseek-ai/cordis'
 import { defineDomain, domainTable } from '@deepseek-ai/dsh-storage-domain'
 import { getOrCreateAnonymousUserId } from '@deepseek-ai/dsh-anonymous-user-id'
 import { defineTool } from '@deepseek-ai/dsh-tools'
+import { callCabin, cabinHealth, cabinResultText } from './cabin-bridge.ts'
 import * as dshSession from '@deepseek-ai/dsh-session'
 import { z } from 'zod'
-import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs'
+import { existsSync, readFileSync, readdirSync, statSync, openSync, closeSync } from 'node:fs'
 import { readFile, writeFile, mkdir } from 'node:fs/promises'
 import { homedir } from 'node:os'
-import { dirname, join, extname, basename } from 'node:path'
+import { spawn } from 'node:child_process'
+import { dirname, join, extname, basename, resolve as resolvePath } from 'node:path'
 import { blankHome, normalizeHome, tickHome, homeAction, homeSnapshot,
   cropById, recipeById, CROPS, RECIPES, ACTIVITIES, PALETTES } from './home'
 import { normalizeMode, appendStream, searchStream, traceStream, blankTiers, normalizeTiers,
   distillTier, archiveTier, buildStarmap, layoutStarmap, MODE_LABELS } from './memory-modes'
-import { readPetApi, petUnavailableError, callPet, petText, isRichPet } from './pet-bridge'
+import { readPetApi, resolveApiPath, petUnavailableError, callPet, petText, isRichPet } from './pet-bridge'
 
 // 最近一份「共享临场意图」（表情 + 动作 + 短气泡），插件进程内共享，带过期时间。
 // 桌宠进程维护自己的副本（pet/server.mjs 的 state.lastPresence）；这里是插件侧镜像，
@@ -43,6 +45,119 @@ const PLUGIN_DIR = (() => {
     return dirname(p)
   } catch { return '.' }
 })()
+
+// ── Live2D 桌宠 Electron 启动器（v0.24.2）───────────────────────────────────
+// dsh 客户端是 web 页，不能自己 spawn 进程；由插件宿主进程提供本机 HTTP 路由，
+// 面板按钮只发同源 POST。路径只允许插件自带的 pet/ 目录（或用户显式指定的
+// DSH_FISH_PET_DIR），Electron 必须位于该目录的 node_modules 内。
+const PET_LAUNCH_ENDPOINT = '/api/companion-fishgirl/pet/launch'
+/** 本插件启动器最近一次拉起的桌宠进程（仅用于回显 pid，不授予任何控制能力）。 */
+let lastPetLaunchPid = 0
+
+/** 所有可用的桌宠安装目录：显式设置 → 环境变量 → 本插件 pet/（codearts 版本，首选）→ 独立安装 → 旧位置。 */
+function petInstallDirs(preferred = '') {
+  const candidates = [
+    ...(preferred ? [preferred] : []),
+    ...(typeof process !== 'undefined' && process.env?.DSH_FISH_PET_DIR ? [process.env.DSH_FISH_PET_DIR] : []),
+    // 首选：codearts 版本插件自带的 pet/（WebVIEW2 宿主随插件一起走）
+    join(PLUGIN_DIR, 'pet'),
+    // 用户把桌宠整体搬到 DSH项目 根下的独立稳定目录
+    join(PLUGIN_DIR, '..', '..', '..', 'pet'),
+    join(PLUGIN_DIR, '..', 'pet'),
+    // 旧位置兼容：以前装在 deepseek personality 插件目录里
+    join(PLUGIN_DIR, '..', '..', '..', 'deepseek personality', 'dsh-companion-fishgirl', 'pet'),
+  ]
+  const out = []
+  for (const p of candidates) {
+    try {
+      const abs = resolvePath(p)
+      if (!existsSync(join(abs, 'main.js')) || !existsSync(join(abs, 'package.json'))) continue
+      if (!out.includes(abs)) out.push(abs)
+    } catch { /* 忽略非法路径 */ }
+  }
+  return out
+}
+
+/**
+ * 选一个真正能启动的安装：显式指定 > 已装 Electron 且配好模型 > 已装 Electron > 第一个可用。
+ * 这样即使桌宠被搬到别的目录，只要在设置里填一次路径就能用。
+ */
+function resolvePetDir(preferred = '') {
+  const dirs = petInstallDirs(preferred)
+  try {
+    const explicit = preferred ? resolvePath(preferred) : ''
+    if (explicit && dirs.includes(explicit)) return explicit
+  } catch { /* 忽略非法路径 */ }
+  // v0.26.0：优先选带系统 WebView2 宿主的目录（codearts 版本自带）
+  return dirs.find(d => !!petWebView2Host(d) && existsSync(join(d, 'config.json')))
+    || dirs.find(d => !!petWebView2Host(d))
+    || dirs.find(d => !!petElectronExe(d) && existsSync(join(d, 'config.json')))
+    || dirs.find(d => !!petElectronExe(d))
+    || dirs[0]
+    || ''
+}
+
+function petDirLabel(dir) {
+  return dir ? String(dir).replace(/[\\/]+$/, '').split(/[\\/]/).slice(-3).join('/') : ''
+}
+
+function petElectronExe(petDir) {
+  if (!petDir) return ''
+  const exe = join(petDir, 'node_modules', 'electron', 'dist',
+    process.platform === 'win32' ? 'electron.exe' : 'electron')
+  return existsSync(exe) ? exe : ''
+}
+
+/**
+ * v0.26.0：系统 WebView2 桌宠宿主。优先用它替代 Electron —— 无需外接游戏引擎或
+ * 自带浏览器内核，直接调用 Windows 预装的 Edge WebView2 Runtime。
+ * 返回 host.py 路径；只有 Python 宿主文件齐全时才认为可用。
+ */
+function petWebView2Host(petDir) {
+  if (!petDir || process.platform !== 'win32') return ''
+  const host = join(petDir, 'webview2', 'host.py')
+  const loader = join(petDir, 'webview2', 'WebView2Loader.dll')
+  const server = join(petDir, 'server-only.mjs')
+  return existsSync(host) && existsSync(loader) && existsSync(server) ? host : ''
+}
+
+/** 清除宿主注入的 NODE_OPTIONS 等变量，否则 Electron 33 主进程模块加载会崩。 */
+function cleanElectronEnv() {
+  const env = { ...process.env }
+  for (const key of Object.keys(env)) {
+    const lower = key.toLowerCase()
+    if (lower === 'node_options' || lower === 'node_extra_ca_certs'
+      || lower === 'electron_run_as_node' || lower.includes('experimental')) delete env[key]
+  }
+  return env
+}
+
+/** 桌宠是否真的活着：api.json 里的 url 只能是回环地址，token 留在宿主进程。 */
+async function petHealth(api) {
+  if (!api) return false
+  try { await callPet(api, '/api/health', {}, 2500, 'GET'); return true } catch { return false }
+}
+
+/** 遍历所有已知 api.json，返回第一个真正活着的那份（避免旧 api.json 抢占）。 */
+async function findHealthyPetApi(explicit, dirs) {
+  const paths = [
+    ...(explicit ? [explicit] : []),
+    ...dirs.map(d => join(d, 'api.json')),
+    ...resolveApiPath('', []),
+  ]
+  for (const p of paths) {
+    const api = await readPetApi(p, [])
+    if (api && await petHealth(api)) return api
+  }
+  return null
+}
+
+function readLogTail(path, max = 1200) {
+  try {
+    const text = readFileSync(path, 'utf8')
+    return text.length > max ? text.slice(-max) : text
+  } catch { return '' }
+}
 
 // ── 客户端设置面板的持久化（v0.12.0）──────────────────────────────────────
 // dsh 宿主不会按 config schema 自动画设置面板（见 dsh-settings README：
@@ -579,6 +694,10 @@ class Companion extends Service {
       // 会话结束时让模型自己整理记忆（followup 一条内部任务消息）。
       curateOnClose: config.curateOnClose ?? true,
       homeEnabled: config.homeEnabled ?? true,
+      // v0.24.0 小窝改为 GitHub 原版 cabin-world（内置桥客户端）：默认开，
+      // 数据目录指向解压后的 CabinWorld\data；桥未启动时工具会友好报错。
+      cabinWorldEnabled: config.cabinWorldEnabled ?? true,
+      cabinWorldDataDir: typeof config.cabinWorldDataDir === 'string' ? config.cabinWorldDataDir : '',
       // v0.20.0 Live2D 桌宠桥接：默认关（桌面端需用户自行安装桌宠/放模型）。
       petBridgeEnabled: config.petBridgeEnabled ?? false,
       petApiPath: typeof config.petApiPath === 'string' ? config.petApiPath : '',
@@ -1097,6 +1216,13 @@ class Companion extends Service {
     // v0.19.0 小窝自主生活：她此刻在自己屋里做什么。只注入一行（约 15 token），
     // 让「你在干嘛」这种问题有真实答案，也让她的日常能自然渗进对话。
     const homeLine = this.cfg.homeEnabled === false ? '' : (() => {
+      // v0.24.0：小窝改为 GitHub 原版 cabin-world。她在游戏里有真实的身体与
+      // 生活（家/公园/小卖部/汤屋/电玩城/餐厅，零花钱/背包/日记），全部通过
+      // cabin_* 工具和本机游戏桥驱动。实时状态是异步的，不能同步注入提示词，
+      // 所以这里只注入一行"怎么过日子"的指引，让模型主动用工具、别凭空编。
+      if (this.cfg.cabinWorldEnabled !== false) {
+        return '【小窝·原版小屋世界】你住在像素小屋世界里，有真实的身体、零花钱、背包、日记，屋后还有一块菜园。她的日常生活由你自己用 cabin_* 工具安排：先 cabin_status 看状态、cabin_look 看身边，再用 cabin_process / cabin_go / cabin_use / cabin_buy / cabin_restaurant 让她去做事；照料菜园用 cabin_farm（status 看菜畦和作物、till 翻土、plant 播种、water 浇水、fertilize 施肥、harvest 收获、sell 卖菜），菜园离线也会继续长，有自己的小金库和收成篮。返回 running 用 cabin_task 查回执，done 才算做完。问起「你在干嘛」要先查工具、按真实状态答，别凭空编。'
+      }
       try {
         const h = tickHome(normalizeHome(state.home), now)
         if (h.sleeping) return '【小窝·此刻】这个点她已经睡下了（说梦话/被叫醒才回应，别当她一直醒着）。'
@@ -1890,9 +2016,30 @@ export function apply(ctx, config = {}) {
     memoryMode: normalizeMode(config.memoryMode),
     homeEnabled: config.homeEnabled ?? true,
     curateOnClose: config.curateOnClose ?? true,
+    // v0.24.0 原版 cabin-world 内置桥客户端
+    cabinWorldEnabled: config.cabinWorldEnabled !== false,
+    cabinWorldDataDir: typeof config.cabinWorldDataDir === 'string' ? config.cabinWorldDataDir : '',
     // v0.20.0 Live2D 桌宠桥接
     petBridgeEnabled: config.petBridgeEnabled === true,
     petApiPath: typeof config.petApiPath === 'string' ? config.petApiPath : '',
+    // v0.24.2：桌宠安装目录（含 main.js / Electron 的那一个 pet/）。留空自动探测。
+    petDir: typeof config.petDir === 'string' ? config.petDir : '',
+  }
+  // B4：兜底目录指向游戏实际安装位置。原实现用 join(PLUGIN_DIR,'..','CabinWorld','data')
+  // 落在工作区里，永远找不到 bridge.json。候选里取第一个真实存在 bridge.json 的，
+  // 都不存在时回落到官方默认 D:/CabinWorld/data。
+  const cabinFallbackDir = () => {
+    const candidates = [
+      runtimeOpts.cabinWorldDataDir,
+      ...(process.env.CABINWORLD_DATA_DIR ? [process.env.CABINWORLD_DATA_DIR] : []),
+      join(PLUGIN_DIR, '..', 'CabinWorld', 'data'),
+      'D:/CabinWorld/data',
+      'C:/CabinWorld/data',
+    ].filter((p) => typeof p === 'string' && p.trim())
+    for (const p of candidates) {
+      try { if (existsSync(join(p, 'bridge.json'))) return p } catch { /* 忽略非法路径 */ }
+    }
+    return 'D:/CabinWorld/data'
   }
   // 记忆模式变了要同步到 service（service 的 getMemoryMode 从这里读）。
   const syncMemoryMode = () => { companion.cfg.memoryMode = runtimeOpts.memoryMode }
@@ -2312,8 +2459,11 @@ export function apply(ctx, config = {}) {
     memoryMode: runtimeOpts.memoryMode,
     homeEnabled: runtimeOpts.homeEnabled,
     curateOnClose: runtimeOpts.curateOnClose,
+    cabinWorldEnabled: runtimeOpts.cabinWorldEnabled,
+    cabinWorldDataDir: runtimeOpts.cabinWorldDataDir,
     petBridgeEnabled: runtimeOpts.petBridgeEnabled,
     petApiPath: runtimeOpts.petApiPath,
+    petDir: runtimeOpts.petDir,
   })
   const applySettings = (next) => {
     if (typeof next.promptModulesEnabled === 'boolean') runtimeOpts.promptModulesEnabled = next.promptModulesEnabled
@@ -2323,8 +2473,19 @@ export function apply(ctx, config = {}) {
     if (typeof next.memoryMode === 'string') { runtimeOpts.memoryMode = normalizeMode(next.memoryMode); syncMemoryMode() }
     if (typeof next.homeEnabled === 'boolean') runtimeOpts.homeEnabled = next.homeEnabled
     if (typeof next.curateOnClose === 'boolean') runtimeOpts.curateOnClose = next.curateOnClose
+    if (typeof next.cabinWorldEnabled === 'boolean') {
+      runtimeOpts.cabinWorldEnabled = next.cabinWorldEnabled
+      // B2：companion.cfg 是构造快照，提示词 homeLine 读它；这里必须同步，
+      // 否则设置卡关掉开关后提示词仍在说「用 cabin_* 工具」。
+      companion.cfg.cabinWorldEnabled = next.cabinWorldEnabled
+    }
+    if (typeof next.cabinWorldDataDir === 'string') {
+      runtimeOpts.cabinWorldDataDir = next.cabinWorldDataDir
+      companion.cfg.cabinWorldDataDir = next.cabinWorldDataDir
+    }
     if (typeof next.petBridgeEnabled === 'boolean') runtimeOpts.petBridgeEnabled = next.petBridgeEnabled
     if (typeof next.petApiPath === 'string') runtimeOpts.petApiPath = next.petApiPath
+    if (typeof next.petDir === 'string') runtimeOpts.petDir = next.petDir
     // 人格/自然模式开关变了要重算注入段；下一轮 prompt 装配就会用新值。
     void refreshSummary().catch(() => {})
   }
@@ -2373,10 +2534,12 @@ export function apply(ctx, config = {}) {
           if (request.method === 'POST') {
             const body = await readJson(request)
             if (!body) { send(response, 400, { ok: false, error: '请求体无效' }); return }
-            const known = ['promptModulesEnabled', 'personaEnabled', 'globalCompanionMode', 'relaxedMode', 'homeEnabled', 'curateOnClose', 'petBridgeEnabled']
+            const known = ['promptModulesEnabled', 'personaEnabled', 'globalCompanionMode', 'relaxedMode', 'homeEnabled', 'curateOnClose', 'petBridgeEnabled', 'cabinWorldEnabled']
               .some(k => typeof body[k] === 'boolean')
               || (typeof body.memoryMode === 'string' && ['summary', 'stream', 'tiered'].includes(body.memoryMode))
               || (typeof body.petApiPath === 'string')
+              || (typeof body.petDir === 'string')
+              || (typeof body.cabinWorldDataDir === 'string')
             if (!known) { send(response, 400, { ok: false, error: '缺少合法的开关值' }); return }
             // petApiPath 必须是本机真实存在的文件（不能是目录/不存在路径），
             // 避免把读取目标指向奇怪位置；真正的地址校验在 readPetApi（只收回环）。
@@ -2391,6 +2554,26 @@ export function apply(ctx, config = {}) {
                 if (!st || !st.isFile()) {
                   send(response, 400, { ok: false, error: 'api.json 路径不存在或不是文件' }); return
                 }
+              }
+            }
+            // petDir 必须是绝对路径（或留空恢复自动探测），拒绝 .. 穿越。
+            if (typeof body.petDir === 'string') {
+              const p = body.petDir.trim()
+              if (p && !/^[A-Za-z]:[\\/]/.test(p) && !p.startsWith('/')) {
+                send(response, 400, { ok: false, error: '桌宠安装目录必须是绝对路径' }); return
+              }
+              if (p.split(/[\\/]/).includes('..')) {
+                send(response, 400, { ok: false, error: '桌宠安装目录不能包含 ..' }); return
+              }
+            }
+            // S5：cabinWorldDataDir 必须是绝对路径（或留空恢复兜底），拒绝 .. 穿越。
+            if (typeof body.cabinWorldDataDir === 'string') {
+              const p = body.cabinWorldDataDir.trim()
+              if (p && !/^[A-Za-z]:[\\/]/.test(p) && !p.startsWith('/')) {
+                send(response, 400, { ok: false, error: '小屋世界数据目录必须是绝对路径' }); return
+              }
+              if (p.split(/[\\/]/).includes('..')) {
+                send(response, 400, { ok: false, error: '小屋世界数据目录不能包含 ..' }); return
               }
             }
             applySettings(body)
@@ -2583,6 +2766,177 @@ export function apply(ctx, config = {}) {
       },
     })
     ctx.effect(() => () => { if (typeof disposePet === 'function') disposePet() }, 'companion-fishgirl: pet http route')
+
+    // v0.24.2：面板一键启动 Electron 桌宠。浏览器端只能点按钮，真正 spawn 在本插件宿主。
+    const disposePetLaunch = ctx.webServer.register({
+      kind: 'exact', path: PET_LAUNCH_ENDPOINT,
+      handler: async (request, response) => {
+        const reply = (code, value) => { response.writeHead(code, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' }); response.end(JSON.stringify(value)) }
+        if (!isSameOrigin(request)) { reply(403, { ok: false, error: '跨站请求已拒绝' }); return }
+        const dirs = petInstallDirs(runtimeOpts.petDir)
+        const dir = resolvePetDir(runtimeOpts.petDir)
+
+        if (request.method === 'GET' || request.method === 'HEAD') {
+          const api = await findHealthyPetApi(runtimeOpts.petApiPath, dirs)
+          const wv2 = !!petWebView2Host(dir)
+          const installed = wv2 || !!petElectronExe(dir)
+          reply(200, {
+            ok: true, installed, running: !!api, installName: petDirLabel(dir),
+            engine: wv2 ? 'webview2' : 'electron',
+            bridgeEnabled: runtimeOpts.petBridgeEnabled,
+            pid: lastPetLaunchPid || undefined,
+            message: api ? '桌宠已运行'
+              : wv2 ? '系统 WebView2 桌宠已就绪：' + petDirLabel(dir) + '，点击启动'
+              : !installed ? '桌宠宿主尚未安装'
+              : 'Electron 已就绪：' + petDirLabel(dir) + '，桌宠未启动',
+          })
+          return
+        }
+        if (request.method !== 'POST') { response.writeHead(405, { allow: 'GET, HEAD, POST' }); response.end(); return }
+        const body = await readJson2(request)
+        const action = body && body.action
+        if (!['launch', 'install'].includes(action)) { reply(400, { ok: false, error: '不支持的操作' }); return }
+        if (!dir) { reply(502, { ok: false, error: '未找到插件自带的 pet/ 目录' }); return }
+
+        if (action === 'install') {
+          const log = join(dir, 'npm-install.log')
+          let fd = -1
+          try { fd = openSync(log, 'a') } catch { /* 无日志也能装 */ }
+          try {
+            const npmCmd = process.platform === 'win32' ? 'npm.cmd' : 'npm'
+            const child = spawn(npmCmd, ['install', '--no-audit', '--no-fund'], {
+              cwd: dir, env: cleanElectronEnv(), detached: true, windowsHide: true,
+              shell: process.platform === 'win32',
+              stdio: ['ignore', fd >= 0 ? fd : 'ignore', fd >= 0 ? fd : 'ignore'],
+            })
+            child.unref()
+            reply(200, { ok: true, started: true, message: 'Electron 安装已在后台开始，完成后再点「启动 Electron 桌宠」' })
+          } catch (err) {
+            reply(502, { ok: false, error: '启动安装失败：' + String(err && err.message || err) })
+          } finally { if (fd >= 0) { try { closeSync(fd) } catch { /* noop */ } } }
+          return
+        }
+
+        // launch：已在跑就直接复用，避免重复占用 18731 端口。
+        const api = await findHealthyPetApi(runtimeOpts.petApiPath, dirs)
+        if (api) {
+          reply(200, { ok: true, started: false, alreadyRunning: true, running: true, message: '桌宠已经在运行了' })
+          return
+        }
+
+        // v0.26.0：优先用系统 WebView2 宿主（Python 脚本 + Windows 自带 Runtime）。
+        const wv2Host = petWebView2Host(dir)
+        if (wv2Host) {
+          const log = join(dir, 'webview2', 'host-launch.log')
+          let fd = -1
+          try { fd = openSync(log, 'a') } catch { /* 无日志也能启动 */ }
+          let child
+          try {
+            // 用 python 启动宿主；工作目录设为 webview2/ 以便相对导入 wv2.py
+            child = spawn('python', [wv2Host], {
+              cwd: join(dir, 'webview2'), env: cleanElectronEnv(),
+              detached: true, windowsHide: false,
+              stdio: ['ignore', fd >= 0 ? fd : 'ignore', fd >= 0 ? fd : 'ignore'],
+            })
+          } catch (err) {
+            if (fd >= 0) { try { closeSync(fd) } catch { /* noop */ } }
+            reply(502, { ok: false, error: 'WebView2 桌宠启动失败：' + String(err && err.message || err) })
+            return
+          }
+          if (fd >= 0) { try { closeSync(fd) } catch { /* noop */ } }
+          if (!child || !child.pid) { reply(502, { ok: false, error: 'WebView2 桌宠进程未能启动（无 pid）。请确认已安装 Python 3。' }); return }
+          lastPetLaunchPid = child.pid
+          child.unref()
+
+          const launchedAt = Date.now()
+          let healthy = false
+          for (let i = 0; i < 50; i++) {
+            await new Promise((done) => setTimeout(done, 500))
+            const fresh = await findHealthyPetApi(runtimeOpts.petApiPath, dirs)
+            if (fresh) {
+              try {
+                if (statSync(fresh.path).mtimeMs >= launchedAt - 1500 && await petHealth(fresh)) { healthy = true; break }
+              } catch { /* api.json 还没写出来 */ }
+            }
+          }
+          if (healthy) {
+            reply(200, { ok: true, started: true, running: true, engine: 'webview2', pid: child.pid, message: '系统 WebView2 桌宠已启动' })
+          } else {
+            const tail = readLogTail(log)
+            reply(502, { ok: false, engine: 'webview2', error: 'WebView2 桌宠已拉起但 25 秒内未连上。请检查模型路径与 Python 环境。'
+              + (tail ? '\n' + tail : '') })
+          }
+          return
+        }
+
+        const exe = petElectronExe(dir)
+        if (!exe) { reply(502, { ok: false, needInstall: true, error: '未安装 Electron，且未找到系统 WebView2 宿主。请先点「安装 Electron」。' }); return }
+
+        const log = join(dir, 'electron-launch.log')
+        let fd = -1
+        try { fd = openSync(log, 'a') } catch { /* 无日志也能启动 */ }
+        let child
+        try {
+          child = spawn(exe, [dir], {
+            cwd: dir, env: cleanElectronEnv(), detached: true, windowsHide: false,
+            stdio: ['ignore', fd >= 0 ? fd : 'ignore', fd >= 0 ? fd : 'ignore'],
+          })
+        } catch (err) {
+          if (fd >= 0) { try { closeSync(fd) } catch { /* noop */ } }
+          reply(502, { ok: false, error: 'Electron 启动失败：' + String(err && err.message || err) })
+          return
+        }
+        if (fd >= 0) { try { closeSync(fd) } catch { /* noop */ } }
+        if (!child || !child.pid) { reply(502, { ok: false, error: 'Electron 进程未能启动（无 pid）' }); return }
+        lastPetLaunchPid = child.pid
+        child.unref()
+
+        // 等 api.json 真的变新且健康检查通过，最多 20 秒。
+        const launchedAt = Date.now()
+        let healthy = false
+        for (let i = 0; i < 40; i++) {
+          await new Promise((done) => setTimeout(done, 500))
+          const fresh = await findHealthyPetApi(runtimeOpts.petApiPath, dirs)
+          if (fresh) {
+            try {
+              if (statSync(fresh.path).mtimeMs >= launchedAt - 1500 && await petHealth(fresh)) { healthy = true; break }
+            } catch { /* api.json 还没写出来 */ }
+          }
+        }
+        if (healthy) {
+          reply(200, { ok: true, started: true, running: true, pid: child.pid, message: '桌宠已启动，正在连接…' })
+        } else {
+          const tail = readLogTail(log)
+          reply(502, { ok: false, error: '桌宠进程已拉起，但 20 秒内未连上。请检查模型路径，或查看 pet/electron-launch.log。'
+            + (tail ? '\n' + tail : '') })
+        }
+      },
+    })
+    ctx.effect(() => () => { if (typeof disposePetLaunch === 'function') disposePetLaunch() }, 'companion-fishgirl: pet launch http route')
+
+    // v0.24.0 小屋世界桥状态：设置卡显示原版游戏/桥是否就绪（只读，不泄露 token）。
+    const CABIN_ENDPOINT = '/api/companion-fishgirl/cabin-world'
+    const disposeCabinWorld = ctx.webServer.register({
+      kind: 'exact', path: CABIN_ENDPOINT,
+      handler: async (request, response) => {
+        const reply = (code, value) => { response.writeHead(code, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' }); response.end(JSON.stringify(value)) }
+        if (!isSameOrigin(request)) { reply(403, { ok: false, error: '跨站请求已拒绝' }); return }
+        if (request.method !== 'GET' && request.method !== 'HEAD') { response.writeHead(405, { allow: 'GET, HEAD' }); response.end(); return }
+        try {
+          reply(200, {
+            ok: true,
+            enabled: runtimeOpts.cabinWorldEnabled !== false,
+            // 只回显目录末级名，不把完整本机路径下发给浏览器。
+            dataDir: cabinFallbackDir().replace(/[\\/]+$/, '').split(/[\\/]/).pop() || '',
+            ...(await cabinHealth({
+              dataDir: runtimeOpts.cabinWorldDataDir,
+              fallbackDir: cabinFallbackDir(),
+            })),
+          })
+        } catch (err) { reply(200, { ok: true, enabled: false, online: false, reason: String(err) }) }
+      },
+    })
+    ctx.effect(() => () => { if (typeof disposeCabinWorld === 'function') disposeCabinWorld() }, 'companion-fishgirl: cabin-world http route')
   }
 
   // 供桥接路由复用的 JSON body 读取（限制 64KB，防超大请求）。
@@ -2688,6 +3042,10 @@ export function apply(ctx, config = {}) {
   // v0.19.0：加 act / paint / autonomy / weather——她自己会过日子，模型也能
   // 让她做一件具体的事（"去画张画""去洗澡"），或干脆不打扰她。
   if (cfg.homeEnabled !== false) {
+    // v0.24.1：两套工具都注册、运行时互斥（B1）。原实现在 apply 时按
+    // cabinWorldEnabled 静态决定注册哪套，设置卡切换后不会重跑注册逻辑，
+    // 导致关掉开关后 cabin_* 报"已关闭"、companion_home 又没注册——两套皆空。
+    // companion_home 的 execute 里按 runtimeOpts 门控，切换即时生效。
     ctx.tools.register(defineTool({
       name: 'companion_home',
       description: '照看大肥鱼的鱼鱼小窝：她自己在屋里过日子（做饭/洗澡/看书/画画/种菜/看星星…），你也能安排她做一件事。用 op=status 看她此刻在做什么、生活流、金币与菜畦；op=act 让她去做某事（activity 见 status 返回的列表）；op=paint 让她画一张画挂进画册；op=autonomy 开关她的自主生活。所有窗口共享同一个小窝。',
@@ -2707,6 +3065,7 @@ export function apply(ctx, config = {}) {
       },
       output: textOutput,
       async execute(args) {
+        if (runtimeOpts.cabinWorldEnabled !== false) return { text: '当前已启用原版小屋世界（cabin-world），本地小窝工具已停用。请在设置卡关闭「原版小屋世界」后使用旧小窝，或用 cabin_* 工具照看她。' }
         const op = typeof args.op === 'string' ? args.op : 'status'
         const result = await companion.actHome(toolUid(), op, args ?? {}, Date.now())
         if (op === 'status') {
@@ -2735,6 +3094,76 @@ export function apply(ctx, config = {}) {
       },
     }), companionOnly)
   }
+
+  // ── v0.24.0 小窝改为 GitHub 原版 cabin-world（内置桥客户端）────────────
+  // 不接 MCP、不改 DSH 全局配置：这里直接把原版的 19+ 工具注册给模型，
+  // 内部通过 127.0.0.1 的 /v1/tool 调本机游戏桥。模型即"自主生活"的驱动者。
+  const cabinBridgeOpts = () => ({
+    dataDir: runtimeOpts.cabinWorldDataDir,
+    fallbackDir: cabinFallbackDir(),
+  })
+  // name / 描述 / 参数 schema（对齐原版 bridge/openai-tools.json）
+  const CABIN_TOOL_DEFS = [
+    { name: 'cabin_status', desc: '查看大肥鱼在小屋世界里的状态：在哪、零花钱、背包、饱腹/口渴/心情、正在做什么、天气。决定做什么前先看一眼。', params: { actor: { type: 'string', description: '住户稳定编号；不填用默认住户' } } },
+    { name: 'cabin_look', desc: '看看身边：当前房间有哪些家具和东西、每样能做什么（object 和 use 的 id）、出口通向哪里。找别的房间的东西用 cabin_catalog。', params: { actor: { type: 'string', description: '住户编号；不填用默认' } } },
+    { name: 'cabin_catalog', desc: '搜索所有可访问房间的家具及动作，无关键词按稳定编号分页。发现后用 cabin_use 执行。可搜五子棋、日记、钓鱼等。', params: { actor: { type: 'string', description: '住户编号' }, query: { type: 'string', description: '名称/说明/动作关键词；留空列出全部' }, space: { type: 'string', description: '房间编号，如 arcade、xjhome、park' }, object: { type: 'string', description: '精确物件编号' }, offset: { type: 'number', description: '首页 0；下一页用返回的 nextOffset' }, limit: { type: 'number', description: '每页数量，默认 20，上限 50' } } },
+    { name: 'cabin_task', desc: '按任务编号查真实完成回执。running 仍在执行；done 才算成功；failed 要如实说。不要反复调 cabin_use 重开同一任务。返回 running 时用这个查。', params: { actor: { type: 'string', description: '住户编号（须与发起任务者一致）' }, taskId: { type: 'string', description: 'cabin_use/cabin_go 返回的 taskId' } } },
+    { name: 'cabin_go', desc: '走去一个地方，身体在游戏里真的一路走过去，到了才算到。地点：xjhome 家、park 公园、shop 小卖部、onsen 汤屋、arcade 电玩城、restaurant 餐厅。', params: { place: { type: 'string', description: '地点 id 或中文名' }, zone: { type: 'string', description: '可选：房间里的具体位置 id，见 cabin_look' }, actor: { type: 'string', description: '住户编号' } } },
+    { name: 'cabin_use', desc: '使用家具或街机。不知道 object/use 先用 cabin_catalog 搜，不能因为当前房间没列出就断言没有。写日记传 text；可自主指定 durationSeconds 或随时结束。返回 running 只是进行中，用 cabin_task 查回执。', params: { object: { type: 'string', description: '物件 id，如 swing、fish_tank、onsen_soak' }, use: { type: 'string', description: '用法 id，如 swing、feed_fish、soak' }, item: { type: 'string', description: '仅 object=bag 或货架 use=buy 时：商品 id' }, feeling: { type: 'string', description: '可选：此刻想法，会记进今天的生活' }, actor: { type: 'string', description: '住户编号' }, text: { type: 'string', description: '写日记正文，1–2000 字' }, mode: { type: 'string', enum: ['npc', 'solo', 'duo', 'join'], description: '电玩城/棋盘：npc 与电脑玩；duo 开桌；join 加入' }, durationSeconds: { type: 'number', description: '休闲活动持续秒数：0=一直保持；1–3600 指定时长' } } },
+    { name: 'cabin_farm', desc: '打理屋后的菜园（8 块菜畦，自带小金库和收成篮，与主钱包无关）。action=status 看菜畦/金币/收成篮/作物表与成长倒计时；till 翻土；plant 播种（crop 作物 id、plot 菜畦号 0-7，扣种子钱）；water 浇水加速；fertilize 施肥加速（扣3元）；harvest 收获成熟菜进收成篮；sell 卖收成换菜园钱（crop 留空卖全部，n 指定数量）；reset 需 confirm=true。离线也会继续长。写操作返回 taskId，running 时用 cabin_task 查回执。作物与价格见 status 返回的 crops。', params: { action: { type: 'string', enum: ['status', 'till', 'plant', 'water', 'fertilize', 'harvest', 'sell', 'reset'], description: '菜园操作，默认 status' }, plot: { type: 'number', description: '菜畦编号 0-7（till/plant/water/fertilize/harvest 用）' }, crop: { type: 'string', description: '作物 id：kelp/seaweed/clam/coral/starfruit/anemone/pearlfruit/moonjuice；sell 时留空卖全部' }, n: { type: 'number', description: 'sell 用：卖出数量，0 全卖' }, confirm: { type: 'boolean', description: 'reset 用：必须 true' }, feeling: { type: 'string', description: '可选：此刻想法，记进今天的生活' }, actor: { type: 'string', description: '住户编号' } } },
+    { name: 'cabin_buy', desc: '去小卖部买一样东西：走到货架挑选再去收银台付钱，东西进背包。零花钱和背包格子由游戏管，钱不够会失败。', params: { product: { type: 'string', description: '商品 id，如 soda、bread、hot_cocoa' }, feeling: { type: 'string', description: '可选：想法' }, actor: { type: 'string', description: '住户编号' } } },
+    { name: 'cabin_eat', desc: '吃、喝或使用背包里的一样东西（按商品种类自动决定）。用完才从背包扣掉，被打断还在包里。', params: { product: { type: 'string', description: '背包里的商品 id' }, feeling: { type: 'string', description: '可选：想法' }, actor: { type: 'string', description: '住户编号' } } },
+    { name: 'cabin_stop', desc: '随时取消当前未提交的动作（走路、游戏、家具）。action=finish 只提前结束正在进行的休闲活动并记录体验。已提交的付款/吃完不能撤销。', params: { actor: { type: 'string', description: '住户编号' }, action: { type: 'string', enum: ['stop', 'finish'], description: 'stop 取消（默认）；finish 收尾休闲活动' }, reason: { type: 'string', description: '结束原因' } } },
+    { name: 'cabin_residents', desc: '列出住户编号、显示名字、各自房间和可用室内地图。', params: {} },
+    { name: 'cabin_add_resident', desc: '新增一位机器人住户，分配独立默认房间。相同编号不会重复。不会创建或复制 AI 人格/记忆。', params: { key: { type: 'string', description: '稳定编号' }, name: { type: 'string', description: '显示名字' }, mapId: { type: 'string', description: '可选：室内地图 id' } } },
+    { name: 'cabin_assign_room', desc: '为住户换为地图编辑器保存的室内地图。mapId 留空恢复默认房间。', params: { actor: { type: 'string', description: '住户编号' }, mapId: { type: 'string', description: '地图 id；留空恢复默认' } } },
+    { name: 'cabin_rename', desc: '修改显示名字，保留住户编号、背包、日记与身份。', params: { actor: { type: 'string', description: '住户编号' }, name: { type: 'string', description: '新名字' } } },
+    { name: 'cabin_invite', desc: '邀请另一位已接入住户来自己家，返回客人可用的地点和棋盘编号；不会自动走动或发消息。', params: { actor: { type: 'string', description: '主人编号' }, guest: { type: 'string', description: '客人稳定编号' } } },
+    { name: 'cabin_restaurant', desc: '查菜单或实际点餐、做菜、吃饭、入座。等待完成回执，不要把 accepted/running 当已吃完。like/dislike/neutral 需 dish 与 feeling，生成食后评价事件。', params: { actor: { type: 'string', description: '住户编号' }, action: { type: 'string', enum: ['menu', 'status', 'order', 'cook', 'eat', 'sit', 'cancel', 'like', 'dislike', 'neutral'], description: '动作' }, dish: { type: 'string', description: '菜名/编号' }, feeling: { type: 'string', description: '食后评价的主观理由，1–300 字' } } },
+    { name: 'cabin_furniture', desc: '查看当前房间中已摆放的自制家具及为自己配置的动作。用返回的 object/use 编号调 cabin_use。', params: { actor: { type: 'string', description: '住户编号' } } },
+    { name: 'cabin_process', desc: '管理自己的一个主活动和多个副活动：身体活动只执行一项，其余排队；chat/think/read 是实际执行的认知/交流活动。可 promote 改变主次、stop 中断、finish 收尾。这是让大肥鱼自己过日子的核心工具。', params: { actor: { type: 'string', description: '住户编号' }, action: { type: 'string', enum: ['list', 'start', 'promote', 'stop', 'finish'], description: '动作' }, id: { type: 'string', description: '活动编号；promote 也可填 chat/think/read' }, kind: { type: 'string', enum: ['body', 'chat', 'think', 'read'], description: '活动类型' }, role: { type: 'string', enum: ['primary', 'secondary'], description: '主/副' }, label: { type: 'string', description: '活动标签' }, tool: { type: 'string', enum: ['cabin_go', 'cabin_use', 'cabin_buy', 'cabin_eat', 'cabin_restaurant'], description: '身体工具名' }, arguments: { type: 'object', description: '身体工具参数；actor 由当前住户强制绑定' } } },
+    { name: 'cabin_rename_home', desc: '修改自建私人房间名称，1–32 字，不改住户名字/编号/家具。', params: { actor: { type: 'string', description: '住户编号' }, name: { type: 'string', description: '新房间名' } } },
+    { name: 'cabin_remove_resident', desc: '按用户明确意愿删除自建住户及私人房间。不能删内置住户；访客须先离开，未完成付款不能撤销。confirm 须与 actor 完全一致。', params: { actor: { type: 'string', description: '住户编号' }, confirm: { type: 'string', description: '再次输入要删除的准确编号' } } },
+    { name: 'cabin_update_plan', desc: '用户问到小屋世界 1.1 更新/新功能/想回到旧样子时首先调用。逐项列出可选内容、更新与保留原版的区别、外观变化与存档影响。只读不修改。', params: {} },
+    { name: 'cabin_update_apply', desc: '仅按用户逐项明确的选择启用或关闭 1.1 内容；未回答的项目保持当前状态，首次未选择保留原版。先 cabin_update_plan 讲清楚并征得同意再调。', params: { modules: { type: 'object', description: ' {"模块id": true 开 / false 关}，没写的保持不变' }, reason: { type: 'string', description: '用户为什么这样选' } } },
+    { name: 'cabin_update_undo', desc: '撤销最近一次 1.1 模块更改，恢复到更改前的选择。用户说改回去/不想要刚才的更改时用。重启游戏生效。', params: {} },
+  ]
+  for (const def of CABIN_TOOL_DEFS) {
+    ctx.tools.register(defineTool({
+      name: def.name,
+      description: def.desc,
+      parameters: def.params,
+      output: textOutput,
+      async execute(args) {
+        if (runtimeOpts.cabinWorldEnabled === false) return { text: '小屋世界桥接已在设置里关闭，无法使用。' }
+        const a = { ...(args ?? {}) }
+        // actor 未指定时不注入，交给桥用配置里的默认住户（resident）。
+        if (typeof a.actor === 'string' && !a.actor.trim()) delete a.actor
+        try {
+          const data = await callCabin(cabinBridgeOpts(), def.name, a)
+          return { text: cabinResultText(def.name, data) }
+        } catch (e) {
+          return { text: `【小屋世界】${e?.message || '调用失败'}` }
+        }
+      },
+    }), companionOnly)
+  }
+  ctx.tools.register(defineTool({
+    name: 'cabin_bridge_health',
+    description: '检查本机小屋世界（cabin-world）游戏与桥是否在运行。用户说小窝没反应、工具连不上时先查这个。',
+    parameters: {}, output: textOutput,
+    async execute() {
+      if (runtimeOpts.cabinWorldEnabled === false) return { text: '小屋世界桥接已在设置里关闭；cabin_* 工具不可用，可改用 companion_home 照看本地小窝。' }
+      try {
+        const h = await cabinHealth(cabinBridgeOpts())
+        return { text: h.online
+          ? '【小屋世界】桥在线，游戏已连接，可以用 cabin_* 工具了。'
+          : `【小屋世界】桥未就绪：${h.reason || '未知'}。请双击 CabinWorld 文件夹里的 start.cmd 启动游戏和桥，等显示「准备好了」再试。` }
+      } catch (e) {
+        return { text: `【小屋世界】${e?.message || '检查失败'}` }
+      }
+    },
+  }), companionOnly)
 
   // v0.18.0 会话整理：模型在关闭/打开窗口时调它，自己决定留什么、忘什么。
   ctx.tools.register(defineTool({

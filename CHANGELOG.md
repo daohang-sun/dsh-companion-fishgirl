@@ -1,3 +1,58 @@
+## v0.26.0 · 桌宠外壳改用 Windows 系统自带 WebView2（未发布）· 2026-11-26
+
+- **去掉外接游戏引擎/Electron 内核**：桌宠窗口不再依赖 Electron，改用 Windows 预装的 **Edge WebView2 Runtime** + Python ctypes 直接调 COM（当前环境不允许运行时编译 C#，故用纯解释方案，零编译、零第三方包）。`pet/webview2/host.py` 启动本机 `server-only.mjs`（沿用原有 Live2D 模型服务与命令/事件队列），再用系统 WebView2 加载桌宠页；`wv2.py` 是最小 COM 绑定（接口顺序来自官方 WebView2.h 1.0.4370.26）。
+- **交互**：透明无边框置顶窗口，顶部 44px 为拖拽区、其余区域交给 Live2D 互动；F9 切换鼠标穿透，Ctrl+Shift+Q 退出。背景通过 `ICoreWebView2Controller2.put_DefaultBackgroundColor` 设为全透明。
+- **插件启动路由改为优先 WebView2**：`pet/launch` 探测到 `webview2/host.py` + `WebView2Loader.dll` 时用 `python` 拉起系统宿主，Electron 退为回退路径；目录探测顺序改为**本插件 `pet/`（codearts 版本）优先**，即桌宠文件随插件走。GET 状态新增 `engine: 'webview2' | 'electron'`。
+- **文件归位到 codearts 版本**：桌宠程序（含 WebVIEW2 宿主与 Loader）恢复到 `dsh-companion-fishgirl/pet/`；`package.json` 版本升到 **0.26.0**，`files` 纳入 `pet/start-webview2.cmd`、`pet/webview2/{host.py,wv2.py,WebView2Loader.dll}`；`.gitignore` 排除 WebView2 用户数据与日志。
+- 验证：Runtime 158.0.4370.33 环境创建/透明背景/Controller/Navigate 全链路 `hr=0`；宿主端到端启动日志显示本机服务就绪 + 页面加载成功；插件 `npm run build` 通过。
+
+## v0.25.2 · TeleAgent 重绘家具落地 + 菜园状态联动（未发布）· 2026-11-25
+
+- **替换程序化占位图**：TeleAgent/updream 重绘的 16 张像素家具已裁掉底部 32px「AI 生成」水印带（主体上半居中、底部留白正好是水印区），按 `pixelsPerUnit=2` 走原版 `POST /v1/furniture` 重新导入：菜园三态、日记角、合上的日记本、三幅画、八件海洋小摆件。旧库条目已清空并备份为 `library.json.bak-before-teleagent`，原图仍在 TeleAgent 工作空间未动。
+- **修掉原版启动顺序 bug**：`WorldData` 比 `Economy` 先初始化，启动校验自制家具库时 `save_path` 还没设置，导致库被当成空库、布局永远回退默认（这就是之前“导入 13 件却看不见”的根因）。`game/core/furniture_maker.gd` 改为用 `InstallPaths.resolve_save()` 直接解析 `--save` / 环境变量 / `cabinworld.ini`，不再依赖 autoload 顺序。新 EXE 已重新导出替换 `D:/CabinWorld/CabinWorld.exe`。
+- **菜园三态联动**：`vads_link.gd` 新增 `home.reload` 帧；桥在每次 `cabin_farm` 写操作后按 `farm.json` 状态（ready/growing/empty）改写布局里的 `user-garden_*`，并让运行中的游戏热重载，画面里的 4×2 菜园会跟着翻土/播种/成熟变化。
+- **摆场**：14 件家具摆进小鲸鱼家（下方空地），自制家具层设为 floor 不挡路；布局校验 42/42 通过，桥查询可见 14 件，游戏截图确认全部渲染。预览图 `assets/cabin/furniture-preview.png`。
+- 验证：16/16 导入成功、布局校验 OK、`cabin_furniture` 14 件、empty/growing/mature 三态切换实测通过。
+
+## v0.25.1 · Live2D 桌宠一键启动（未发布）· 2026-11-25
+
+- **不用再手动开文件管理器**：侧栏「鱼鱼小窝 → Live2D 桌宠」新增「🚀 启动 Electron 桌宠 / 刷新状态 / 安装 Electron」按钮。浏览器端只发同源请求，真正 `spawn` 由插件宿主进程完成，并清除宿主注入的 `NODE_OPTIONS` 等变量（避免 Electron 33 主进程模块加载崩溃）；日志写进桌宠目录 `electron-launch.log`。启动后自动打开桥接并刷新表情/动作目录，无需重启 dsh。
+- **多安装位置自动探测**：按「设置里的桌宠安装目录 → `DSH_FISH_PET_DIR` → `D:/Study/DSH项目/pet/`（已安装的独立目录）→ 本插件 `pet/` → 旧位置 `deepseek personality/.../pet/`」顺序找安装，优先选**已装 Electron 且配好模型**的那份；状态卡显示当前用的是哪份。健康检查遍历所有已知 `api.json`，只认真正活着的本机回环服务，避免旧 api.json 抢占。
+- **新增设置卡字段 `petDir`**：「桌面形象」可填桌宠 `pet` 目录绝对路径（留空自动探测），后端校验绝对路径并拒绝 `..`；`readPetApi` 仍只允许回环地址，token 不下发浏览器。跨站请求 403，非法 action 400。
+- **实际放置位置**：桌宠是独立程序，Electron 与桌宠程序整体放在 `D:/Study/DSH项目/pet/`，模型放在 `D:/Study/DSH项目/DeepSeek免费公皮/DeepSeek/`，均在插件目录之外；`petDir` 已写入设置，切换平行版本时不再重装 Electron。
+- 验证：隔离 harness 10/10 PASS（路由注册、安装探测、跨站拒绝、非法 action、petDir 校验与持久化）；`npm run build` 与 `node --check client.js` 通过。
+
+## v0.25.0 · 原版游戏内新增「屋后菜园」系统（未发布）· 2026-11-25
+
+- **真·改 Godot 源码**：在原版 cabin-world 游戏内新增农场系统，不是插件侧模拟。游戏侧新增 `game/core/farm.gd`（独立原子存档 `farm.json`，走 `safe_store.gd` 的 .bak 恢复），在 `vads_link.gd` 注册 `farm.do → farm.result` 帧；桥侧 `resident.mjs` 加 `farm()`/`farmQuery()` 事务（走到屋后 → 动画 → 提交 → 回执），`bridge.mjs` 与 `openai-tools.json` 加第 23 个工具 `cabin_farm`；插件注册同名工具并把菜园写进每轮小窝指引。
+- **玩法**：8 块菜畦、8 种作物（海带 / 紫菜 / 花蛤 / 珊瑚菜 / 海星果 / 海葵 / 珍珠果 / 月见草），翻土 → 播种（扣种子钱）→ 浇水 / 施肥（加速成熟）→ 收获（进收成篮）→ 卖菜（换菜园钱）。菜园有自己的小金库（初始 60）和收成篮，与主钱包分离，保证所有农场事务在同一份原子存档内完成，零跨文件不一致风险。成长按墙上时钟推进，**离线也继续长**。
+- **工具链**：本机原无 Godot，下载 Godot 4.7.2 编辑器 + Windows 导出模板（`D:/GodotTools/`），用 headless 导入校验全部 GDScript；农场纯逻辑单测 15/15 通过。新 EXE 导出后替换安装（保留 `data/` 存档）。
+- **备份**：改动前的 `vads_link.gd` / `economy.gd` / `bridge.mjs` / `openai-tools.json` / `resident.mjs` 备份在 `D:/GodotTools/src-backup-20261125-162013/`。
+- 验证：`node --check` 全过、插件构建含 `cabin_farm`、农场单测 15 PASS。端到端需新 EXE 导出后复验。
+
+## v0.24.1 · 原版小窝桥接 bug 修复与安全加固（未发布）· 2026-11-25
+
+- **修复开关切换无效（B1/B2）**：原实现在插件加载时静态决定注册哪套工具，设置卡关掉「原版小屋世界」后 `cabin_*` 报已关闭、`companion_home` 又未注册，导致两套工具皆空；提示词读的是构造快照，关掉开关后仍注入原版指引。改为两套工具都注册、`execute` 内按运行时开关互斥，并把设置改动同步回 `companion.cfg`，开关即时生效、回退旧小窝可用。
+- **修复兜底数据目录（B4）**：兜底路径从错误的工作区位置改为游戏实际安装位置 `D:/CabinWorld/data`，并支持 `CABINWORLD_DATA_DIR` 环境变量与多候选探测。
+- **设置卡补数据目录输入框（B5）**：可填写 bridge.json 所在目录（回车/失焦保存、留空恢复默认），后端校验绝对路径并拒绝 `..` 穿越；`cabin_bridge_health` 增加开关门控。
+- **桥客户端安全加固（S1–S4）**：只允许回环地址且端口必须与 `bridge.config.json` 一致（防伪造 bridge.json 把工具参数转到本机其它服务）；不跟随重定向；返回文本过滤所有 token/secret/password/apiKey 等敏感字段并截断长度（防间接提示词注入与上下文灌水）；调用超时从 11 分钟降到 2 分钟。
+- **说明**：设定词/指令词总开关（默认关）仍只约束人格类注入；小窝作为功能性拓展，其状态行不受总开关影响（维持原行为）。
+- 验证：安全/纯函数 9 项 + 真实桥端到端 4 项全部通过；`node --check` 与构建通过。
+
+## v0.24.0 · 小窝改为 GitHub 原版 cabin-world 驱动（未发布）· 2026-11-23
+
+- **小窝底座换成原版项目**：鱼鱼的小窝不再是插件自研的 2D 像素屋 + 像素院子，改为直接接入 GitHub 原版 **cabin-world**（VADS，MIT 代码 / CC BY 4.0 美术）——一个独立的 Godot 游戏：家 / 公园 / 小卖部 / 汤屋 / 电玩城 / 餐厅六个地点，零花钱、背包、日记、天气和多住户全部由游戏本体管理。
+- **插件内置桥客户端（非 MCP、不改 DSH 全局配置）**：新增 `src/cabin-bridge.ts`，只读 `<CabinWorld>/data/bridge.json` 的回环地址 + 一次性 token，通过 `POST /v1/tool` 调原版桥；token 只在插件进程内，绝不进模型上下文。注册原版全部工具：`cabin_status/look/catalog/task/go/use/buy/eat/stop/residents/add_resident/assign_room/rename/invite/restaurant/furniture/process/rename_home/remove_resident/update_plan/update_apply/update_undo` + 自检 `cabin_bridge_health`。桥未启动/连不上时给模型友好提示而非报错。
+- **自主生活交给模型主动安排**：新增 `cabin_process` 指引写入每轮动态摘要，让 DeepSeek 自己用工具查看状态、安排做事、查回执（done 才算做完）。原来自研的 40 分钟一幕 / 离线补演 / 菜畦 / 厨房菜谱 / 画册逻辑停用（`companion_home` 工具在启用原版时不再注册），改由游戏本体 + 模型驱动。
+- **配置与设置卡**：`cordis.patch.yml` 新增 `cabinWorldEnabled`（默认开）与 `cabinWorldDataDir`（默认 `D:/CabinWorld/data`）；设置卡「记忆与小窝」新增原版开关与实时桥状态灯（绿=就绪 / 红=未启动，含数据目录提示）。关闭原版开关时回退到旧自研小窝。
+- **游戏本体安装**：官方 Release `CabinWorld-1.1-win64.zip` 下载解压到 `D:/CabinWorld`，双击 `start.cmd` 启动桥（首次会写 `data/bridge.json`）。用 `cabin_bridge_health` 或设置卡状态灯确认就绪。
+
+## 美术回退与 AI 素材保留（未发布）· 2026-11-23
+
+- **回退 v0.25.0 资产管线**：工作区原有的 `assets/cabin/`（cabin-world 原版 28 张烘焙房间素材 + `walk.png` + `layers.json`）已恢复，渲染器回到直接分层实现；v0.25.0 新增的 `cabin/` 目录、`scripts/gen-cabin-assets.mjs` 与 manifest v3 派生产物已移出插件，归档到工作区 `.v025-archive/`，不再参与运行。
+- **保留本轮 AI 绘制的 14 张素材**：6 组角色动作（挥手 / 害羞 / 跳舞 / 打盹 / 吃饭 / 抱玩偶，4 帧横向、cell 314×314）与 8 件小窝物品（贝壳灯、珊瑚盆栽、海星抱枕、珍珠盒、挂钟、音乐盒、小黄鱼玩偶、海螺凳），统一放在 `assets/cabin/`，由原有白名单路由自动 serve，文件名以 `motion-` / `fish-` 开头，可与原版 `xiaojingyu-home.*` 区分。
+- **动作接入**：AI 动作按现有生活活动 ID 映射（chat→挥手、eat/cook/tea→吃饭、nap/sleep→打盹、stargaze/window→害羞、swim→跳舞、bath/tidy→抱抱），点地面寻路、点家具互动、昼夜天气等原版逻辑不变；8 件新家具沿用 cabin-world 的 960×640 逻辑坐标与 depth 分层。
+
 ## v0.23.0 · 设定词/指令词总开关（默认关）+ 安全加固 · 2026-11-23
 
 - **新增「设定词 / 指令词注入」总开关（默认关，给 DeepSeek 更高自由度）**：插件写给模型的角色词、设定词、指令词此前**全部无条件注入**（静态人设 ~1600 token + 每轮动态摘要）。现在新增总开关 `promptModulesEnabled`（默认 `false`），关闭后：

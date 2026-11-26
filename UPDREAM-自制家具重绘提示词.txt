@@ -1,0 +1,180 @@
+================================================================================
+Telegram @updream 重绘提示词 · CabinWorld 原版风格自制家具
+用途：替换当前程序化拼出的占位家具，让菜园 / 日记 / 画作 / 海洋小摆件与原版画风统一
+整理时间：2026-11-25
+================================================================================
+
+【先读：这次要和原版一致，不是之前那种“AI 插画感”】
+
+参考对象：CabinWorld 原版小鲸鱼家的家具与 baked 美术。
+画风基线：16-bit 像素游戏 sprite，硬边 1 像素描边，无抗锯齿、无渐变、无模糊，
+颜色只用海青 / 青绿 / 深蓝 / 米白 / 暖木这套低饱和有限调色板（约 32 色）。
+物体是正经游戏道具：轮廓清楚、占满但不贴边、底部有落地阴影或深色底线，
+不要海报、不要插画构图、不要文字、不要装饰性边框。
+
+【水印规避 —— 每条提示词都必须带】
+
+@updream 默认在右下角盖一大块水印。请一次只生成一张正方形图，不要四宫格。
+把主体放在画面上半部居中，主体高度不超过画面 60%，底部 25% 和右下角
+保持干净棋盘格背景。生成后我们会裁掉底部 25%，再抠掉棋盘格假透明，
+最近邻缩放到目标像素尺寸。水印如果仍压到主体，请重生成，不要试图修图。
+
+把下面三块拼成一条完整提示词粘给 updream：
+STYLE + SUBJECT + LAYOUT
+
+STYLE =
+"16-bit pixel art game sprite, cozy pixel furniture matching Cabin World by VADS,
+crisp hard 1-pixel outlines, no antialiasing, no blur, no gradient, flat limited
+palette of teal, cyan, navy, cream and warm wood (about 32 colors), clean pixel
+grid, checkerboard transparent background, game asset, not illustration."
+
+LAYOUT =
+"Subject centered horizontally in the UPPER part of the canvas, occupies at most
+60% of image height, leave the bottom 25% and the bottom-right corner completely
+empty clean checkerboard, no text, no letters, no watermark, no signature,
+no logo, no border, no label, no UI, no shadow outside the object, one object only."
+
+NEGATIVE（如果 updream 有负面词框就填这里；没有就追加到提示词末尾）=
+"text, letters, watermark, signature, logo, border, frame label, UI, gradient,
+soft shading, antialiasing, blur, 3D render, realistic, photograph, clutter,
+multiple overlapping objects, subject touching the bottom edge"
+
+--------------------------------------------------------------------------------
+一、菜园三态（最重要：当前占位图风格不统一，优先重画这三张）
+--------------------------------------------------------------------------------
+
+目标交付：正方形 1024×1024，单张。我们会裁底 25% 后缩放到 256×128 源像素，
+按 pixelsPerUnit=2 导入成 4×2 格家具。
+
+[G-01] 空菜畦 / 4×2
+SUBJECT =
+"one single 4-by-2 garden bed game sprite for a pixel room: eight small square
+tilled soil plots arranged exactly 4 columns by 2 rows, warm wooden frame around
+the whole bed and thin warm-wood dividers between plots, neat soil furrows,
+small cream speckles, top-down three-quarter view, no plants, no crops, no seeds,
+cozy Cabin World furniture style."
+
+[G-02] 生长中的菜畦 / 4×2
+SUBJECT =
+"one single 4-by-2 garden bed game sprite: eight small square tilled soil plots
+arranged exactly 4 columns by 2 rows, warm wooden frame and dividers, each plot
+has tiny green-teal sprouts or shoots in neat rows, early growth stage, small and
+tidy, not overgrown, top-down three-quarter view, cozy Cabin World furniture style."
+
+[G-03] 成熟菜畦 / 4×2
+SUBJECT =
+"one single 4-by-2 garden bed game sprite: eight small square soil plots arranged
+exactly 4 columns by 2 rows, warm wooden frame and dividers, each plot contains
+one clearly different ripe ocean crop — kelp, clam, coral, pearl fruit, anemone,
+starfish plant, moonjuice flower, nebula berry — neat separated harvest, bright
+but limited teal/cyan/navy/cream/warm-wood palette, top-down three-quarter view,
+cozy Cabin World furniture style."
+
+--------------------------------------------------------------------------------
+二、日记系统视觉（原版书桌已有互动，这里补一个能摆出来的“日记角”）
+--------------------------------------------------------------------------------
+
+目标交付：正方形 1024×1024，单张。缩放到 128×64 源像素，pixelsPerUnit=2，导入成 2×1 格家具。
+
+[D-01] 鱼鱼日记角
+SUBJECT =
+"one single cozy pixel furniture sprite: a small warm-wood writing desk with an
+open cream diary notebook lying on it, thin navy cover, tiny teal fish and shell
+emblem on the page, a short quill pen and a small navy ink bottle beside it,
+simple hard outlines, compact 2-by-1 furniture proportions, top-down three-quarter
+view, matching Cabin World room furniture."
+
+[D-02] 合上的日记本（可选，1×1 小物）
+SUBJECT =
+"one single closed cute pixel diary notebook game sprite, cream cover with a tiny
+navy fish and seashell emblem, teal ribbon bookmark, hard 1-pixel outline, compact
+square 1-by-1 item proportions, checkerboard transparent background."
+
+--------------------------------------------------------------------------------
+三、画作系统视觉（原版画架已有互动，这里补可摆放的完成画作）
+--------------------------------------------------------------------------------
+
+目标交付：正方形 1024×1024，单张。缩放到 64×64 源像素，pixelsPerUnit=2，导入成 1×1 格家具。
+
+[P-01] 小鲸鱼海景画
+SUBJECT =
+"one small framed pixel painting game sprite, warm-wood square frame, navy night
+sky with a cream moon and a few stars, teal sea, one cute little whale swimming,
+flat limited palette, hard 1-pixel outlines, no text, no signature, compact
+square 1-by-1 furniture proportions, matching Cabin World pixel art."
+
+[P-02] 海边小屋画（可选）
+SUBJECT =
+"one small framed pixel painting game sprite, warm-wood square frame, a tiny
+seaside cottage with one warm cream window light, teal sea and navy sky, flat
+limited palette, hard outlines, no text, no signature, square 1-by-1 item."
+
+[P-03] 珊瑚与鱼群画（可选）
+SUBJECT =
+"one small framed pixel painting game sprite, warm-wood square frame, teal coral
+reef with three tiny fish, cream sand, navy water, flat limited palette, hard
+outlines, no text, no signature, square 1-by-1 item."
+
+--------------------------------------------------------------------------------
+四、海洋小摆件（1×1，目前是旧素材临时占位，建议统一重画）
+--------------------------------------------------------------------------------
+
+目标交付：每张正方形 1024×1024，单张。缩放到 64×64 源像素，pixelsPerUnit=2，导入成 1×1 格家具。
+每条都使用同一 STYLE + 下面 SUBJECT + LAYOUT。
+
+[I-01] 海螺小凳
+SUBJECT = "one small warm-cream conch shell stool pixel furniture, spiral shell seat, short warm-wood legs, compact square item, matching Cabin World furniture."
+
+[I-02] 珊瑚花盆
+SUBJECT = "one small teal ceramic pot with a tiny pink-coral plant, hard pixel outlines, compact square item, matching Cabin World furniture."
+
+[I-03] 小鱼抱枕
+SUBJECT = "one small cyan fish-shaped plush cushion, cream belly, navy outline, soft-looking but hard pixel edges, compact square item."
+
+[I-04] 海洋八音盒
+SUBJECT = "one small warm-wood music box with a teal shell on top, tiny cream music notes carved into the side but no readable text, compact square item."
+
+[I-05] 海洋挂钟
+SUBJECT = "one small round ocean wall clock, warm-wood rim, teal sea face, tiny cream fish as clock hands, hard pixel outlines, compact square item."
+
+[I-06] 珍珠小盒
+SUBJECT = "one small cream pearl jewelry box with teal ribbon and one pearl on top, hard pixel outlines, compact square item."
+
+[I-07] 贝壳小灯
+SUBJECT = "one small cream shell table lamp, teal base, warm cream glow, hard pixel outlines, compact square item."
+
+[I-08] 海星坐垫
+SUBJECT = "one small warm-cream starfish floor cushion, teal stitching, navy outline, compact square item."
+
+--------------------------------------------------------------------------------
+五、可选：角色动作帧（如果也想让家具真正“能用”）
+--------------------------------------------------------------------------------
+
+这些是横排帧表：每条生成一张 1024×1024，我们会裁掉底部水印后抠图，
+改成 4 帧横排、每帧 64×64，总 256×64 源像素。
+
+角色身份串（每条动作提示词开头都加）：
+"Using the reference character exactly as identity basis: same chibi fish girl,
+long wavy dark-navy-to-cyan hair, white frilled maid headdress with blue flower,
+dark navy maid dress with cream apron, big teal eyes, blue fish side fins."
+
+[A-01] 浇水
+"NEW POSE: holding a small teal watering can, watering a garden plot, gentle smile."
+
+[A-02] 写日记
+"NEW POSE: sitting at a desk writing in an open cream diary with a quill, focused soft expression."
+
+[A-03] 画画
+"NEW POSE: standing at a warm-wood easel painting on a small canvas, happy little smile."
+
+[A-04] 收获
+"NEW POSE: holding a small woven basket with kelp and pearl fruits, proud smile."
+
+================================================================================
+交付后我会做的事
+================================================================================
+1. 裁掉底部 25% 水印区，抠掉棋盘格假透明；
+2. 最近邻缩到上表标注的源像素尺寸（1×1=64×64，2×1=128×64，4×2=256×128）；
+3. 走原版 POST /v1/furniture 重新导入，pixelsPerUnit=2；
+4. 保留现在的程序化占位图作为备份，不删除原始素材。
+================================================================================

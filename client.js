@@ -270,12 +270,35 @@ window.__ModuleLoader__.load({
       memoryMode: ['summary', 'stream', 'tiered'].indexOf(d.memoryMode) >= 0 ? d.memoryMode : 'summary',
       homeEnabled: d.homeEnabled !== false,
       curateOnClose: d.curateOnClose !== false,
+      cabinWorldEnabled: d.cabinWorldEnabled !== false,
+      cabinWorldDataDir: typeof d.cabinWorldDataDir === 'string' ? d.cabinWorldDataDir : '',
       petBridgeEnabled: d.petBridgeEnabled === true,
+      petDir: typeof d.petDir === 'string' ? d.petDir : '',
     })
+    // v0.24.0 原版小屋世界桥状态：只读显示，1.5 秒刷新一次，不泄露 token。
+    function CabinWorldStatus() {
+      const [st, setSt] = React.useState(null)
+      React.useEffect(() => {
+        let alive = true
+        const load = () => fetch(resolveApiUrl('/api/companion-fishgirl/cabin-world'), { headers: { 'x-companion-settings': '1' } })
+          .then((r) => r.json()).then((d) => { if (alive) setSt(d) }).catch(() => { if (alive) setSt({ online: false, reason: '读取失败' }) })
+        load()
+        const t = setInterval(load, 1500)
+        return () => { alive = false; clearInterval(t) }
+      }, [])
+      const online = !!(st && st.online)
+      const color = online ? '#5FB98A' : '#D96A5B'
+      return h('div', { style: { display: 'flex', alignItems: 'center', gap: 8, padding: '6px 10px', margin: '2px 0 6px', borderRadius: 9, background: 'var(--dsw-alias-fill-tertiary,rgba(116,174,197,.08))', fontSize: 11.5 } },
+        h('i', { style: { width: 8, height: 8, borderRadius: '50%', background: color, flex: 'none' } }),
+        h('span', null, online ? '小屋世界桥已就绪，可以用 cabin_* 工具了' : (st ? `桥未就绪：${st.reason || '请先启动游戏'}` : '正在检查小屋世界桥…')),
+        st && st.dataDir ? h('span', { style: { opacity: .6, marginLeft: 'auto' } }, String(st.dataDir).split(/[\\/]/).slice(-1)[0]) : null)
+    }
     function CompanionSettingsCard() {
       ensureCfgStyle()
       const [opts, setOpts] = React.useState(null)
       const [err, setErr] = React.useState('')
+      const [dirDraft, setDirDraft] = React.useState(null)
+      const [petDirDraft, setPetDirDraft] = React.useState(null)
       React.useEffect(() => {
         let alive = true
         settingsApi('GET').then((d) => { if (alive) setOpts(readOpts(d)) })
@@ -327,13 +350,54 @@ window.__ModuleLoader__.load({
             'aria-label': '记忆类型', value: opts ? opts.memoryMode : 'summary', disabled: !opts,
             style: selectStyle, onChange: (e) => save({ memoryMode: e.target.value }),
           }, MEMORY_MODES.map(m => h('option', { key: m.id, value: m.id }, m.label)))),
-        Row('homeEnabled', '鱼鱼小窝',
-          '侧栏里的小窝面板：生活数值、种田、画册、记忆星图。'),
+        Row('cabinWorldEnabled', '原版小屋世界（GitHub cabin-world）',
+          '鱼鱼的小窝改为原版 Godot 游戏驱动：她有真实身体/零花钱/背包/日记，你自己用 cabin_* 工具安排生活。需先启动 CabinWorld 的 start.cmd。'),
+        h(CabinWorldStatus),
+        h('div', { className: 'cfgs-row' },
+          h('div', { className: 'cfgs-label' },
+            h('span', { className: 'cfgs-title' }, '小屋世界数据目录'),
+            h('span', { className: 'cfgs-desc' }, 'bridge.json 所在目录，默认 D:/CabinWorld/data。改完按回车或切走焦点保存；留空恢复默认。')),
+          h('input', {
+            'aria-label': '小屋世界数据目录', className: 'fh-input',
+            placeholder: 'D:/CabinWorld/data', disabled: !opts,
+            value: dirDraft !== null ? dirDraft : (opts ? (opts.cabinWorldDataDir || '') : ''),
+            style: { maxWidth: 210, fontSize: 12 },
+            onChange: (e) => setDirDraft(e.target.value),
+            onBlur: () => {
+              if (dirDraft === null) return
+              const v = dirDraft.trim()
+              setErr('')
+              settingsApi('POST', { cabinWorldDataDir: v }).then((d) => {
+                setOpts(readOpts(d)); setDirDraft(null)
+              }).catch((e) => { setErr(String(e && e.message || e)); setDirDraft(null) })
+            },
+            onKeyDown: (e) => { if (e.key === 'Enter') e.target.blur() },
+          })),
         Row('curateOnClose', '会话整理',
           '窗口关闭后，下扇窗口打开时让大肥鱼自己挑选值得长期记住的内容。'),
         Group('桌面形象'),
         Row('petBridgeEnabled', 'Live2D 桌宠桥接',
-          '连接本机 pet/ 桌宠进程；开启后侧栏「鱼鱼小窝 → Live2D 桌宠」可联动表情/动作，大肥鱼也能用工具驱动它。需先启动桌宠。'),
+          '连接本机 pet/ 桌宠进程；开启后侧栏「鱼鱼小窝 → Live2D 桌宠」可联动表情/动作，大肥鱼也能用工具驱动它。桌宠可在侧栏一键启动。'),
+        h('div', { className: 'cfgs-row' },
+          h('div', { className: 'cfgs-label' },
+            h('span', { className: 'cfgs-title' }, '桌宠安装目录'),
+            h('span', { className: 'cfgs-desc' }, '含桌宠宿主与模型配置的 pet 文件夹。留空自动探测（优先用本插件自带的 webview2 版本）；改完按回车或切走焦点保存。')),
+          h('input', {
+            'aria-label': '桌宠安装目录', className: 'fh-input',
+            placeholder: '留空自动探测', disabled: !opts,
+            value: petDirDraft !== null ? petDirDraft : (opts ? (opts.petDir || '') : ''),
+            style: { maxWidth: 210, fontSize: 12 },
+            onChange: (e) => setPetDirDraft(e.target.value),
+            onBlur: () => {
+              if (petDirDraft === null) return
+              const v = petDirDraft.trim()
+              setErr('')
+              settingsApi('POST', { petDir: v }).then((d) => {
+                setOpts(readOpts(d)); setPetDirDraft(null)
+              }).catch((e) => { setErr(String(e && e.message || e)); setPetDirDraft(null) })
+            },
+            onKeyDown: (e) => { if (e.key === 'Enter') e.target.blur() },
+          })),
         err ? h('div', { className: 'cfgs-err', role: 'alert' }, '保存失败：' + err) : null)
     }
 
@@ -645,6 +709,15 @@ window.__ModuleLoader__.load({
       ['xj-plant-desk', 'xiaojingyu-home.xj-plant-desk.png', 579, 142, 21, 28, 205, null],
       ['xj-rabbit', 'xiaojingyu-home.xj-rabbit.png', 492, 28, 19, 24, 121, null],
       ['xj-window', 'xiaojingyu-home.xj-window.png', 590, 28, 82, 60, 86, 'window'],
+      // 本次 AI 绘制的鱼鱼小窝物品（沿用 cabin-world 960×640 逻辑坐标与 depth）
+      ['fish-ocean-clock', 'fish-ocean-clock.png', 300, 20, 36, 36, 25, null],
+      ['fish-shell-lamp', 'fish-shell-lamp.png', 250, 180, 30, 40, 220, null],
+      ['fish-music-box', 'fish-music-box.png', 620, 190, 32, 22, 212, null],
+      ['fish-coral-pot', 'fish-coral-pot.png', 780, 200, 40, 55, 255, null],
+      ['fish-conch-stool', 'fish-conch-stool.png', 685, 330, 30, 26, 356, null],
+      ['fish-pearl-box', 'fish-pearl-box.png', 628, 360, 28, 20, 380, null],
+      ['fish-fish-plush', 'fish-fish-plush.png', 790, 430, 34, 28, 458, null],
+      ['fish-starfish-cushion', 'fish-starfish-cushion.png', 340, 470, 48, 30, 500, null],
     ].sort((a, b) => a[6] - b[6])
     const CABIN_SPOTS = {
       sleep: [160, 150], read: [520, 100], write: [160, 380], draw: [770, 170],
@@ -653,6 +726,16 @@ window.__ModuleLoader__.load({
       music: [520, 300], stargaze: [615, 95], chat: [630, 400], idle: [480, 340],
     }
     const WALK_ROWS = { down: 0, left: 1, right: 2, up: 3 }
+    // 本次 AI 绘制的角色动作：4 帧横向单排、cell 314×314，映射到已有生活活动
+    const AI_MOTIONS = {
+      wave: 'motion-wave.png', shy: 'motion-shy.png', dance: 'motion-dance.png',
+      sleep: 'motion-sleep.png', eat: 'motion-eat.png', hug: 'motion-hug.png',
+    }
+    const ACT_MOTION = {
+      chat: 'wave', stargaze: 'shy', window: 'shy', swim: 'dance',
+      eat: 'eat', cook: 'eat', tea: 'eat', nap: 'sleep', sleep: 'sleep',
+      bath: 'hug', tidy: 'hug', play: 'dance', pet: 'hug', music: 'hug',
+    }
 
     const CABIN_CACHE = { images: {}, layers: null, ground: null, walk: null, failed: false }
     function cabinImage(src) {
@@ -700,10 +783,10 @@ window.__ModuleLoader__.load({
       }
       let drawn = false
       for (const L of layers) {
-        if (!drawn && L.depth > gy + 8) { drawGirl(ctx, girl, { sleeping, mood, t }); drawn = true }
+        if (!drawn && L.depth > gy + 8) { drawGirl(ctx, girl, { sleeping, mood, t, motion: ACT_MOTION[actId] }); drawn = true }
         ctx.drawImage(L.img, L.x, L.y, L.w, L.h)
       }
-      if (!drawn) drawGirl(ctx, girl, { sleeping, mood, t })
+      if (!drawn) drawGirl(ctx, girl, { sleeping, mood, t, motion: ACT_MOTION[actId] })
       // 台灯夜亮
       if (night || dusk) {
         ctx.globalAlpha = 0.10 + 0.03 * Math.sin(t)
@@ -716,19 +799,25 @@ window.__ModuleLoader__.load({
     }
 
     function drawGirl(ctx, g, st) {
-      const walk = readyImage(CABIN_CACHE.walk || (CABIN_CACHE.walk = cabinImage('walk.png')))
-      if (!walk) return
-      const cell = 313
-      const row = WALK_ROWS[g.facing] ?? 0
-      const frame = st.sleeping ? 0 : (g.moving ? (g.step % 4) : 0)
+      const motion = st.motion && AI_MOTIONS[st.motion] ? st.motion : null
+      const src = motion ? AI_MOTIONS[motion] : 'walk.png'
+      const sheet = readyImage(motion
+        ? (CABIN_CACHE.images[src] || (CABIN_CACHE.images[src] = cabinImage(src)))
+        : (CABIN_CACHE.walk || (CABIN_CACHE.walk = cabinImage('walk.png'))))
+      if (!sheet) return
+      const cell = motion ? 314 : 313
+      const row = motion ? 0 : (WALK_ROWS[g.facing] ?? 0)
+      const frame = motion
+        ? (Math.floor((st.t || 0) * (motion === 'dance' ? 8 : 2)) % 4)
+        : (st.sleeping ? 0 : (g.moving ? (g.step % 4) : 0))
       const sx = frame * cell, sy = row * cell
       const h = 100, w = h
       const x = g.x - w / 2, y = g.y - h + 8
       const shadow = st.shadow || '#6E7C66'
       const sh = [10, 18, 24, 20, 12]
       for (let i = 0; i < 5; i++) px(ctx, shadow, g.x - sh[i] / 2, g.y + 2 + i * 2, sh[i], 2)
-      ctx.drawImage(walk, sx, sy, cell, cell, x, y, w, h)
-      if (st.sleeping) {
+      ctx.drawImage(sheet, sx, sy, cell, cell, x, y, w, h)
+      if (st.sleeping && !motion) {
         ctx.font = 'bold 13px sans-serif'; ctx.fillStyle = '#DCE8FF'
         const z = (st.t / 3 | 0) % 3
         ctx.fillText('z', g.x + 18, g.y - 12 - z * 5)
@@ -1713,6 +1802,9 @@ window.__ModuleLoader__.load({
       const [petTextInput, setPetTextInput] = React.useState('')
       const [petCatalog, setPetCatalog] = React.useState(null)
       const [petEvents, setPetEvents] = React.useState([])
+      // Electron 启动器状态（由插件宿主进程本机 spawn，浏览器不直接碰进程）
+      const [launchInfo, setLaunchInfo] = React.useState(null)
+      const [launchBusy, setLaunchBusy] = React.useState(false)
       // 共享临场意图：桌宠与像素形象表现同一状态（短轮询，过期自动消失）
       const [presence, setPresence] = React.useState(null)
       const [presenceExpression, setPresenceExpression] = React.useState('')
@@ -1744,8 +1836,29 @@ window.__ModuleLoader__.load({
       // 共享临场意图：3 秒轮询（比 15 秒有效期短，过期后端会返回 null）。
       const loadPresence = () => petApi('?view=presence', 'GET')
         .then(r => setPresence(r && r.presence || null)).catch(() => {})
+      const launchApi = (path, method, body) => homeApi('/api/companion-fishgirl/pet/launch' + path, method, body)
+      const loadLaunch = () => launchApi('', 'GET')
+        .then(setLaunchInfo)
+        .catch(e => setLaunchInfo({ installed: false, running: false, message: String(e && e.message || e) }))
+      const launchPet = (action) => {
+        if (launchBusy) return
+        setLaunchBusy(true); setMsg('')
+        return launchApi('', 'POST', { action })
+          .then((r) => {
+            setMsg(r.message || '已发送')
+            if (action !== 'launch') return null
+            // 启动成功后顺手打开桥接，省掉再去设置卡点一次。
+            return settingsApi('POST', { petBridgeEnabled: true }).catch(() => null)
+              .then(() => new Promise(done => setTimeout(done, 1200)))
+          })
+          .then(() => {
+            void petRefresh(); void petLoadCatalog(); void petLoadEvents(); void loadLaunch()
+          })
+          .catch(e => { setMsg(String(e && e.message || e)); void loadLaunch() })
+          .finally(() => setLaunchBusy(false))
+      }
       useEffect(() => {
-        if (tab === 'pet') { void petRefresh(); void petLoadCatalog(); void petLoadEvents() }
+        if (tab === 'pet') { void petRefresh(); void petLoadCatalog(); void petLoadEvents(); void loadLaunch() }
       }, [tab])
       useEffect(() => {
         void loadPresence()
@@ -1888,6 +2001,15 @@ window.__ModuleLoader__.load({
 
         // ── Live2D 桌宠桥接（v0.21：真实表情/动作目录 + 事件流）──
         tab === 'pet' ? h('div', { style: { display: 'flex', flexDirection: 'column', gap: 10 } },
+          h('div', { className: 'fh-panel', style: { borderColor: 'rgba(91,127,212,.5)' } },
+            title('启动 Live2D 桌宠', launchInfo ? (launchInfo.running ? '运行中' : launchInfo.installed ? ('可启动 · ' + (launchInfo.installName || '自动探测')) : '需安装') : '检测中'),
+            h('div', { className: 'fh-msg' }, launchInfo && launchInfo.message ? launchInfo.message : '正在检测系统 WebView2 桌宠状态…'),
+            h('div', { className: 'fh-chips', style: { marginTop: 8 } },
+              chip(launchInfo && launchInfo.running ? '已在运行 · 刷新' : '🚀 启动桌宠',
+                () => { if (launchInfo && launchInfo.running) { void petRefresh(); void loadLaunch() } else { void launchPet('launch') } },
+                launchBusy),
+              chip('刷新状态', () => { void loadLaunch(); void petRefresh() }, launchBusy),
+              launchInfo && launchInfo.installed === false && launchInfo.engine !== 'webview2' ? chip('安装 Electron', () => void launchPet('install'), launchBusy) : null)),
           h('div', { className: 'fh-pet-hero' },
             h('div', { className: 'fh-pet-orb', 'data-on': pet && pet.connected ? 'true' : 'false' }, '🐟'),
             h('div', null,
@@ -1949,7 +2071,8 @@ window.__ModuleLoader__.load({
                 h('span', { className: 'fh-feed-x' }, label))
             }))) : null,
           h('div', { className: 'fh-sub', style: { lineHeight: 1.6, padding: '0 2px' } },
-            '桌宠是独立程序（pet/ 目录），加载你本机解压的大肥鱼 Live2D 模型；先双击 pet/start.cmd 启动它，再点上方「一键开启桥接」（或到插件管理页本插件设置卡打开「Live2D 桌宠桥接」）。'
+            '桌宠加载你本机解压的大肥鱼 Live2D 模型，默认用 Windows 系统自带的 WebView2 显示（无外接游戏引擎、无需 Electron），直接点上方「启动桌宠」即可。'
+            + '拖动窗口顶部移动，F9 切换鼠标穿透，Ctrl+Shift+Q 退出；启动后会自动打开桥接，也可在设置卡里手动开关「Live2D 桌宠桥接」。'
             + '模型版权与署名见 README。面板里的像素小屋不依赖桌宠，随时可用。'))
         : null,
 

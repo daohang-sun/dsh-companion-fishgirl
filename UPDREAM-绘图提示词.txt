@@ -1,0 +1,111 @@
+================================================================================
+Telegram @updream 绘图提示词 · 鱼鱼小窝扩展素材
+用途：为「菜园 / 日记 / 画作」三个系统补像素素材，画风对齐 cabin-world 原版
+整理日期：2026-11-25
+================================================================================
+
+【关于右下角水印 —— 必读】
+updream 默认在成图右下角盖一大块水印。生成时按下面三条规避，生成后按第四条裁切：
+
+ 1. 每条提示词末尾都带 LAYOUT 段：主体压在画面「上半部居中」，高度不超过 60%，
+    底部 25% 与右下角保持干净的棋盘格/背景，不放任何重要内容。
+ 2. 明确写 no text / no watermark / no signature / no border，降低它自带落款的概率。
+ 3. 尽量用 transparent background（棋盘格），主体小一点、留白多，裁掉水印后主体仍完整。
+ 4. 生成后用底部裁切脚本处理（见文末「后处理」）：正方形图裁掉下方约 22-26%，
+    再抠掉棋盘格假透明，缩到目标像素尺寸即可。
+
+【通用画风基线 —— 所有提示词共用，不要改】
+STYLE = "16-bit pixel art sprite, crisp hard 1-pixel outlines, no antialiasing,
+flat limited palette of teal / cyan / navy / cream / warm-wood (about 32 colors),
+pixel density and cozy style matching Cabin World by VADS, checkerboard
+transparent background, no shading blur."
+
+LAYOUT = "Subject placed in the UPPER-CENTER of the canvas, occupies at most 60%
+of image height, leave the bottom 25% and the bottom-right corner completely
+empty clean checkerboard, no text, no letters, no watermark, no signature,
+no border, no label."
+
+用法：把 STYLE + 具体 SUBJECT + LAYOUT 拼成一条，整段粘给 updream。
+尺寸：正方形（1024×1024）；一次出一张，不要四宫格——四宫格容易把主体挤满、裁不掉水印。
+
+--------------------------------------------------------------------------------
+一、菜园系统（Garden）—— 原版 1.1 没有农场，这是最需要补的部分
+--------------------------------------------------------------------------------
+
+[G-01] 空菜畦
+16-bit pixel art sprite, crisp hard 1-pixel outlines, no antialiasing, flat teal/cyan/navy/cream/warm-wood palette (about 32 colors), cozy Cabin World pixel style, checkerboard transparent background. SUBJECT: a single empty garden soil plot, freshly tilled brown earth rectangle with neat furrows and a warm wooden frame, top-down three-quarter view. Subject placed in the UPPER-CENTER of the canvas, occupies at most 60% of image height, leave the bottom 25% and the bottom-right corner completely empty clean checkerboard, no text, no letters, no watermark, no signature, no border, no label.
+
+[G-02] 生长中的菜畦
+...同 STYLE。SUBJECT: a garden soil plot with small green sprouts and seaweed-like shoots growing in neat rows, warm wooden frame, top-down three-quarter view. +LAYOUT
+
+[G-03] 成熟菜畦（海带/珊瑚主题）
+...SUBJECT: a garden soil plot with ripe glowing kelp and small coral cabbages ready to harvest, warm wooden frame. +LAYOUT
+
+[G-04] 浇水壶
+...SUBJECT: a cute small warm-wood and teal watering can with water droplets, simple game item icon. +LAYOUT
+
+[G-05] 种子袋
+...SUBJECT: a small cream canvas seed pouch with a teal tie and a tiny seashell emblem, game item icon. +LAYOUT
+
+[G-06] 收获竹篮
+...SUBJECT: a small woven warm-wood basket with a few harvested kelp and pearl-fruits inside, game item icon. +LAYOUT
+
+[提示] 作物 sprite（12 种）不必逐张画：用 G-03 的成熟菜畦 + 之前的「种子铺」思路，
+       在代码里用 32 色调色板程序化生成不同作物颜色即可，省图又统一。
+
+--------------------------------------------------------------------------------
+二、日记系统（Diary）—— 原版书桌已有 write_diary/read_diary，这里补视觉素材
+--------------------------------------------------------------------------------
+
+[D-01] 合上的日记本
+...SUBJECT: a closed cute diary notebook, cream cover with a small blue fish and seashell emblem, teal ribbon bookmark, game item icon. +LAYOUT
+
+[D-02] 摊开的日记本
+...SUBJECT: an open diary book with blank lined pages, a tiny teal pen resting on it, cozy warm-wood desk corner, game item icon. +LAYOUT
+
+[D-03] 羽毛笔与墨水瓶
+...SUBJECT: a quill pen and a small navy ink bottle on a warm wooden desk, game item icon. +LAYOUT
+
+--------------------------------------------------------------------------------
+三、画作系统（Painting）—— 原版画架已有 sketch + 挂墙，这里补画具与作品
+--------------------------------------------------------------------------------
+
+[P-01] 画架与空白画布
+...SUBJECT: a small warm-wood easel holding a blank cream canvas, a tiny paint smear, cozy game furniture. +LAYOUT
+
+[P-02] 调色盘与画笔
+...SUBJECT: a wooden painter palette with teal and cream paint blobs and two small brushes, game item icon. +LAYOUT
+
+[P-03] 完成画作（四张一组，分四次生成，每张一张）
+...SUBJECT: a small framed pixel painting of [场景], no text, painted look:
+   - P-03a 一片海与鲸鱼 (a little whale swimming in a teal sea at sunset)
+   - P-03b 海边小屋 (a small seaside cottage with a warm window light)
+   - P-03c 珊瑚与鱼群 (colorful coral reef with tiny fish)
+   - P-03d 夜空与月亮 (a navy night sky with a cream moon and stars)
+   +LAYOUT（画框是主体，别让风景撑满）
+
+--------------------------------------------------------------------------------
+四、可选：补足角色动作（沿用之前 6 组的画风）
+--------------------------------------------------------------------------------
+角色参考图：assets/cabin/walk.png 里的小鲸鱼/蓝发女仆装小鱼娘（先裁一帧放大当参考图传给 updream）。
+每条提示词开头加："Using the reference character exactly as identity basis: same chibi girl, long wavy dark-navy-to-cyan hair, white frilled maid headdress with blue flower, dark navy maid dress with cream apron, big teal eyes, blue fish side fins. NEW POSE:"
+
+[A-01] 浇水：holding a small teal watering can, watering a garden plot, gentle smile.
+[A-02] 写日记：sitting at a desk writing in a diary with a quill, focused soft expression.
+[A-03] 画画：standing at an easel painting on a canvas, happy little smile.
+[A-04] 收获：holding a small basket of kelp and pearl-fruits, proud smile.
+以上均 +STYLE +LAYOUT，透明棋盘格背景，主体上半居中。
+
+================================================================================
+后处理（生成后必做，否则水印/棋盘格会进游戏）
+================================================================================
+1. 裁掉水印：把 1024×1024 图裁成 1024×780（裁掉底部 244px≈24%），
+   水印一般在最下方；若右下角仍有残留，再单独裁右下角一小块。
+2. 抠棋盘格假透明：用之前 .art-work/prepare.py 的 strip_checker 思路
+   （检测灰白棋盘格 → 置 alpha=0），注意别把白围裙/白画布误抠。
+3. 最近邻缩放到目标尺寸：家具/道具约 32×32~64×64，动作帧按 313px cell。
+4. 量化到项目 32 色海青暖木调色板，存入 assets/cabin/，并在 layers.json 登记坐标/depth。
+
+【画风一致性自检】生成后对照现有 assets/cabin/fish-*.png：
+颜色是否只有海青/青/深蓝/米白/暖木、边缘是否硬像素无抗锯齿、主体是否够小够留白。
+================================================================================

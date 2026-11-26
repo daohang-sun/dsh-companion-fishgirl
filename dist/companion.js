@@ -3,12 +3,163 @@ import { Service } from "@deepseek-ai/cordis";
 import { defineDomain, domainTable } from "@deepseek-ai/dsh-storage-domain";
 import { getOrCreateAnonymousUserId } from "@deepseek-ai/dsh-anonymous-user-id";
 import { defineTool } from "@deepseek-ai/dsh-tools";
+
+// src/cabin-bridge.ts
+import { readFile } from "node:fs/promises";
+import { isAbsolute, resolve, dirname, join } from "node:path";
+var LOOPBACK = /^(127\.0\.0\.1|localhost|\[::1\]|::1)$/i;
+var DEFAULT_PORT = 18790;
+var MAX_TIMEOUT_MS = 12e4;
+var MAX_TEXT = 240;
+var MAX_LINES = 60;
+var SENSITIVE_KEY = /(token|secret|password|api.?key|authorization|cookie|credential)/i;
+function normalizeDataDir(input, fallback) {
+  const raw = typeof input === "string" && input.trim() ? input.trim() : fallback;
+  if (!raw) return "";
+  const p = isAbsolute(raw) ? raw : resolve(raw);
+  if (p.split(/[\\/]/).includes("..")) return "";
+  return p;
+}
+async function expectedPort(dataDir) {
+  try {
+    const cfgPath = join(dirname(dataDir), "bridge", "bridge.config.json");
+    const cfg = JSON.parse(await readFile(cfgPath, "utf8"));
+    const port = Number(cfg?.http?.port);
+    if (Number.isInteger(port) && port > 0 && port < 65536) return port;
+  } catch {
+  }
+  return DEFAULT_PORT;
+}
+async function safeBridgeUrl(dataDir, rawUrl) {
+  let url;
+  try {
+    url = new URL(String(rawUrl || `http://127.0.0.1:${DEFAULT_PORT}`));
+  } catch {
+    throw new Error("小屋世界 bridge.json 里的地址无效，请重启桥。");
+  }
+  if (url.protocol !== "http:" || !LOOPBACK.test(url.hostname)) {
+    throw new Error("小屋世界桥地址必须是本机回环地址，已拒绝。");
+  }
+  const port = url.port ? Number(url.port) : 80;
+  const expect = await expectedPort(dataDir);
+  if (port !== expect) {
+    throw new Error(`小屋世界桥端口与配置不一致（期望 ${expect}，bridge.json 为 ${port}），已拒绝；请重启桥或检查 bridge.config.json。`);
+  }
+  return url;
+}
+async function readBridge(dataDir) {
+  if (!dataDir) throw new Error("未配置小屋世界数据目录（cabinWorldDataDir）。");
+  let cfg;
+  try {
+    cfg = JSON.parse(await readFile(join(dataDir, "bridge.json"), "utf8"));
+  } catch {
+    throw new Error("读不到小屋世界的 bridge.json。请先双击 CabinWorld 文件夹里的 start.cmd 启动游戏和桥。");
+  }
+  const url = await safeBridgeUrl(dataDir, cfg.url);
+  if (!cfg.token) throw new Error("小屋世界 bridge.json 里没有 token，请重启桥。");
+  return { url, token: String(cfg.token) };
+}
+async function callCabin({ dataDir, fallbackDir }, name, args = {}, timeoutMs = MAX_TIMEOUT_MS) {
+  const dir = normalizeDataDir(dataDir, fallbackDir);
+  const { url, token } = await readBridge(dir);
+  url.pathname = "/v1/tool";
+  const controller = new AbortController();
+  const limit = Math.min(Math.max(1e3, Number(timeoutMs) || MAX_TIMEOUT_MS), MAX_TIMEOUT_MS);
+  const timer = setTimeout(() => controller.abort(), limit);
+  let res;
+  try {
+    res = await fetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+      body: JSON.stringify({ name, arguments: args ?? {} }),
+      signal: controller.signal,
+      redirect: "error"
+      // 不跟随重定向，避免 token 被转发到别处
+    });
+  } catch (e) {
+    if (e?.name === "AbortError") throw new Error("小屋世界桥响应超时（可能游戏正忙），稍后再试。");
+    throw new Error("连不上小屋世界桥，请确认 CabinWorld 的 start.cmd 仍在运行。");
+  } finally {
+    clearTimeout(timer);
+  }
+  const text = await res.text();
+  let data;
+  try {
+    data = text ? JSON.parse(text) : {};
+  } catch {
+    data = { ok: false, error: `桥返回了非 JSON 内容（HTTP ${res.status}）` };
+  }
+  if (!res.ok && data?.ok !== false) throw new Error(`小屋世界桥 HTTP ${res.status}`);
+  return data;
+}
+async function cabinHealth({ dataDir, fallbackDir }, timeoutMs = 3e3) {
+  const dir = normalizeDataDir(dataDir, fallbackDir);
+  if (!dir) return { online: false, reason: "未配置数据目录" };
+  let cfg;
+  try {
+    cfg = JSON.parse(await readFile(join(dir, "bridge.json"), "utf8"));
+  } catch {
+    return { online: false, reason: "bridge.json 不存在（桥未启动）" };
+  }
+  let url;
+  try {
+    url = await safeBridgeUrl(dir, cfg.url);
+  } catch (e) {
+    return { online: false, reason: e?.message || "桥地址无效" };
+  }
+  url.pathname = "/v1/health";
+  try {
+    const res = await fetch(url, { signal: AbortSignal.timeout(Math.max(500, Math.min(timeoutMs, 5e3))) });
+    const j = await res.json().catch(() => ({}));
+    return { online: res.ok, ...j };
+  } catch {
+    return { online: false, reason: "桥无响应" };
+  }
+}
+function clip(value, max = MAX_TEXT) {
+  const s = String(value).replace(/[\r\n]+/g, " ").trim();
+  return s.length > max ? `${s.slice(0, max)}…` : s;
+}
+function cabinResultText(name, data) {
+  if (data?.error) return `【小屋世界·${name}】失败：${clip(data.error)}${data.hint ? `
+${clip(data.hint)}` : ""}`;
+  const lines = [`【小屋世界·${name}】`];
+  const walk = (obj, depth = 0) => {
+    if (depth > 3 || obj == null || lines.length >= MAX_LINES) return;
+    if (Array.isArray(obj)) {
+      if (obj.length && typeof obj[0] !== "object") lines.push(clip(obj.slice(0, 30).map(clip).join("、")));
+      else obj.slice(0, 20).forEach((o, i) => {
+        if (lines.length >= MAX_LINES) return;
+        lines.push(`  [${i}]`);
+        walk(o, depth + 1);
+      });
+      return;
+    }
+    if (typeof obj !== "object") return;
+    for (const [k, v] of Object.entries(obj)) {
+      if (lines.length >= MAX_LINES) break;
+      if (k === "ok" || k === "taskId" || SENSITIVE_KEY.test(k)) continue;
+      if (v == null) continue;
+      if (typeof v === "object") {
+        lines.push(`  ${k}:`);
+        walk(v, depth + 1);
+      } else lines.push(`  ${k}: ${clip(v)}`);
+    }
+  };
+  walk(data);
+  if (data?.taskId) lines.push(`  taskId: ${clip(data.taskId)}（用 cabin_task 查回执，done 才算完成）`);
+  if (lines.length === 1) lines.push("  （无更多内容）");
+  return lines.join("\n");
+}
+
+// src/index.ts
 import * as dshSession from "@deepseek-ai/dsh-session";
 import { z } from "zod";
-import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
-import { readFile as readFile2, writeFile, mkdir } from "node:fs/promises";
+import { existsSync, readFileSync, readdirSync, statSync, openSync, closeSync } from "node:fs";
+import { readFile as readFile3, writeFile, mkdir } from "node:fs/promises";
 import { homedir as homedir2 } from "node:os";
-import { dirname, join as join2, extname, basename } from "node:path";
+import { spawn } from "node:child_process";
+import { dirname as dirname2, join as join3, extname, basename, resolve as resolvePath } from "node:path";
 
 // src/home.ts
 var HOME_VERSION = 2;
@@ -932,9 +1083,9 @@ function layoutStarmap(map, width = 640, height = 360) {
 }
 
 // src/pet-bridge.ts
-import { readFile } from "node:fs/promises";
+import { readFile as readFile2 } from "node:fs/promises";
 import { homedir } from "node:os";
-import { isAbsolute, join } from "node:path";
+import { isAbsolute as isAbsolute2, join as join2 } from "node:path";
 var DEFAULT_DIRS = ["大肥鱼插件", "deepfish-desktop-pet", "DeepFish-desktop-pet", "WHALEL2D"];
 var MAX_PET_RESPONSE_BYTES = 2 * 1024 * 1024;
 function userHome() {
@@ -943,21 +1094,21 @@ function userHome() {
 function resolveApiPath(configured, extraDirs = []) {
   if (typeof configured === "string" && configured.trim()) {
     const p = configured.trim();
-    return isAbsolute(p) || /^[A-Za-z]:[\\/]/.test(p) ? p : join(userHome(), p);
+    return isAbsolute2(p) || /^[A-Za-z]:[\\/]/.test(p) ? p : join2(userHome(), p);
   }
   const roots = [userHome()];
   if (typeof process !== "undefined" && process.env?.DSH_HOME && process.env.DSH_HOME !== userHome()) {
     roots.push(process.env.DSH_HOME);
   }
   const out = [];
-  const isAbs = (p) => isAbsolute(p) || /^[A-Za-z]:[\\/]/.test(p);
+  const isAbs = (p) => isAbsolute2(p) || /^[A-Za-z]:[\\/]/.test(p);
   for (const dir of extraDirs) {
-    if (isAbs(dir)) out.push(join(dir, "api.json"));
+    if (isAbs(dir)) out.push(join2(dir, "api.json"));
   }
   const relativeDirs = [...extraDirs.filter((d) => !isAbs(d)), ...DEFAULT_DIRS];
   for (const root of roots) {
-    for (const dir of relativeDirs) out.push(join(root, dir, "api.json"));
-    out.push(join(root, "api.json"));
+    for (const dir of relativeDirs) out.push(join2(root, dir, "api.json"));
+    out.push(join2(root, "api.json"));
   }
   return out;
 }
@@ -978,7 +1129,7 @@ async function readPetApi(configured, extraDirs = []) {
   const list = Array.isArray(candidates) ? candidates : [candidates];
   for (const path of list) {
     try {
-      const api = JSON.parse(await readFile(path, "utf8"));
+      const api = JSON.parse(await readFile2(path, "utf8"));
       const url = typeof api.url === "string" ? api.url.trim().replace(/\/+$/, "") : "";
       const token = typeof api.token === "string" ? api.token.trim() : "";
       if (url && token && isLoopbackUrl(url)) return { baseUrl: url, token, path, version: api.version || 1 };
@@ -1040,17 +1191,109 @@ var sharedPresence = null;
 var PLUGIN_DIR = (() => {
   try {
     const p = decodeURIComponent(new URL(import.meta.url).pathname).replace(/^\/([A-Za-z]:)/, "$1");
-    return dirname(p);
+    return dirname2(p);
   } catch {
     return ".";
   }
 })();
-var SETTINGS_DIR = join2(
+var PET_LAUNCH_ENDPOINT = "/api/companion-fishgirl/pet/launch";
+var lastPetLaunchPid = 0;
+function petInstallDirs(preferred = "") {
+  const candidates = [
+    ...preferred ? [preferred] : [],
+    ...typeof process !== "undefined" && process.env?.DSH_FISH_PET_DIR ? [process.env.DSH_FISH_PET_DIR] : [],
+    // 首选：codearts 版本插件自带的 pet/（WebVIEW2 宿主随插件一起走）
+    join3(PLUGIN_DIR, "pet"),
+    // 用户把桌宠整体搬到 DSH项目 根下的独立稳定目录
+    join3(PLUGIN_DIR, "..", "..", "..", "pet"),
+    join3(PLUGIN_DIR, "..", "pet"),
+    // 旧位置兼容：以前装在 deepseek personality 插件目录里
+    join3(PLUGIN_DIR, "..", "..", "..", "deepseek personality", "dsh-companion-fishgirl", "pet")
+  ];
+  const out = [];
+  for (const p of candidates) {
+    try {
+      const abs = resolvePath(p);
+      if (!existsSync(join3(abs, "main.js")) || !existsSync(join3(abs, "package.json"))) continue;
+      if (!out.includes(abs)) out.push(abs);
+    } catch {
+    }
+  }
+  return out;
+}
+function resolvePetDir(preferred = "") {
+  const dirs = petInstallDirs(preferred);
+  try {
+    const explicit = preferred ? resolvePath(preferred) : "";
+    if (explicit && dirs.includes(explicit)) return explicit;
+  } catch {
+  }
+  return dirs.find((d) => !!petWebView2Host(d) && existsSync(join3(d, "config.json"))) || dirs.find((d) => !!petWebView2Host(d)) || dirs.find((d) => !!petElectronExe(d) && existsSync(join3(d, "config.json"))) || dirs.find((d) => !!petElectronExe(d)) || dirs[0] || "";
+}
+function petDirLabel(dir) {
+  return dir ? String(dir).replace(/[\\/]+$/, "").split(/[\\/]/).slice(-3).join("/") : "";
+}
+function petElectronExe(petDir) {
+  if (!petDir) return "";
+  const exe = join3(
+    petDir,
+    "node_modules",
+    "electron",
+    "dist",
+    process.platform === "win32" ? "electron.exe" : "electron"
+  );
+  return existsSync(exe) ? exe : "";
+}
+function petWebView2Host(petDir) {
+  if (!petDir || process.platform !== "win32") return "";
+  const host = join3(petDir, "webview2", "host.py");
+  const loader = join3(petDir, "webview2", "WebView2Loader.dll");
+  const server = join3(petDir, "server-only.mjs");
+  return existsSync(host) && existsSync(loader) && existsSync(server) ? host : "";
+}
+function cleanElectronEnv() {
+  const env = { ...process.env };
+  for (const key of Object.keys(env)) {
+    const lower = key.toLowerCase();
+    if (lower === "node_options" || lower === "node_extra_ca_certs" || lower === "electron_run_as_node" || lower.includes("experimental")) delete env[key];
+  }
+  return env;
+}
+async function petHealth(api) {
+  if (!api) return false;
+  try {
+    await callPet(api, "/api/health", {}, 2500, "GET");
+    return true;
+  } catch {
+    return false;
+  }
+}
+async function findHealthyPetApi(explicit, dirs) {
+  const paths = [
+    ...explicit ? [explicit] : [],
+    ...dirs.map((d) => join3(d, "api.json")),
+    ...resolveApiPath("", [])
+  ];
+  for (const p of paths) {
+    const api = await readPetApi(p, []);
+    if (api && await petHealth(api)) return api;
+  }
+  return null;
+}
+function readLogTail(path, max = 1200) {
+  try {
+    const text = readFileSync(path, "utf8");
+    return text.length > max ? text.slice(-max) : text;
+  } catch {
+    return "";
+  }
+}
+var SETTINGS_DIR = join3(
   typeof process !== "undefined" && process.env?.DSH_HOME ? process.env.DSH_HOME : homedir2(),
   ".dsh",
   "companion-fishgirl"
 );
-var SETTINGS_FILE = join2(SETTINGS_DIR, "settings.json");
+var SETTINGS_FILE = join3(SETTINGS_DIR, "settings.json");
 var SETTINGS_ENDPOINT = "/api/companion-fishgirl/settings";
 function isSameOrigin(request) {
   try {
@@ -1073,7 +1316,7 @@ function isSameOrigin(request) {
 async function readSettingsFile() {
   try {
     if (!existsSync(SETTINGS_FILE)) return null;
-    const parsed = JSON.parse(await readFile2(SETTINGS_FILE, "utf8"));
+    const parsed = JSON.parse(await readFile3(SETTINGS_FILE, "utf8"));
     return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : null;
   } catch {
     return null;
@@ -1081,7 +1324,7 @@ async function readSettingsFile() {
 }
 async function writeSettingsFile(value, ctx) {
   try {
-    await mkdir(dirname(SETTINGS_FILE), { recursive: true });
+    await mkdir(dirname2(SETTINGS_FILE), { recursive: true });
     await writeFile(SETTINGS_FILE, JSON.stringify(value, null, 2), "utf8");
   } catch (err) {
     ctx?.logger?.warn?.(`companion: settings write failed: ${String(err)}`);
@@ -1516,6 +1759,10 @@ var Companion = class extends Service {
       // 会话结束时让模型自己整理记忆（followup 一条内部任务消息）。
       curateOnClose: config.curateOnClose ?? true,
       homeEnabled: config.homeEnabled ?? true,
+      // v0.24.0 小窝改为 GitHub 原版 cabin-world（内置桥客户端）：默认开，
+      // 数据目录指向解压后的 CabinWorld\data；桥未启动时工具会友好报错。
+      cabinWorldEnabled: config.cabinWorldEnabled ?? true,
+      cabinWorldDataDir: typeof config.cabinWorldDataDir === "string" ? config.cabinWorldDataDir : "",
       // v0.20.0 Live2D 桌宠桥接：默认关（桌面端需用户自行安装桌宠/放模型）。
       petBridgeEnabled: config.petBridgeEnabled ?? false,
       petApiPath: typeof config.petApiPath === "string" ? config.petApiPath : ""
@@ -2032,6 +2279,9 @@ ${timeline}`,
       "【记忆写入规则】用户说称呼/喜好/忌讳/约定或「记住…」时，调 companion_remember 记 ≤140 字摘要（别只嘴上答应，已有的别重复）；话题聊了几轮有了看法/决定/进展时，调 companion_topic 写 ≤200 字话题档案（话题名+结论），新窗口才接得上。"
     ];
     const homeLine = this.cfg.homeEnabled === false ? "" : (() => {
+      if (this.cfg.cabinWorldEnabled !== false) {
+        return "【小窝·原版小屋世界】你住在像素小屋世界里，有真实的身体、零花钱、背包、日记，屋后还有一块菜园。她的日常生活由你自己用 cabin_* 工具安排：先 cabin_status 看状态、cabin_look 看身边，再用 cabin_process / cabin_go / cabin_use / cabin_buy / cabin_restaurant 让她去做事；照料菜园用 cabin_farm（status 看菜畦和作物、till 翻土、plant 播种、water 浇水、fertilize 施肥、harvest 收获、sell 卖菜），菜园离线也会继续长，有自己的小金库和收成篮。返回 running 用 cabin_task 查回执，done 才算做完。问起「你在干嘛」要先查工具、按真实状态答，别凭空编。";
+      }
       try {
         const h = tickHome(normalizeHome(state.home), now);
         if (h.sleeping) return "【小窝·此刻】这个点她已经睡下了（说梦话/被叫醒才回应，别当她一直醒着）。";
@@ -2707,9 +2957,30 @@ function apply(ctx, config = {}) {
     memoryMode: normalizeMode(config.memoryMode),
     homeEnabled: config.homeEnabled ?? true,
     curateOnClose: config.curateOnClose ?? true,
+    // v0.24.0 原版 cabin-world 内置桥客户端
+    cabinWorldEnabled: config.cabinWorldEnabled !== false,
+    cabinWorldDataDir: typeof config.cabinWorldDataDir === "string" ? config.cabinWorldDataDir : "",
     // v0.20.0 Live2D 桌宠桥接
     petBridgeEnabled: config.petBridgeEnabled === true,
-    petApiPath: typeof config.petApiPath === "string" ? config.petApiPath : ""
+    petApiPath: typeof config.petApiPath === "string" ? config.petApiPath : "",
+    // v0.24.2：桌宠安装目录（含 main.js / Electron 的那一个 pet/）。留空自动探测。
+    petDir: typeof config.petDir === "string" ? config.petDir : ""
+  };
+  const cabinFallbackDir = () => {
+    const candidates = [
+      runtimeOpts.cabinWorldDataDir,
+      ...process.env.CABINWORLD_DATA_DIR ? [process.env.CABINWORLD_DATA_DIR] : [],
+      join3(PLUGIN_DIR, "..", "CabinWorld", "data"),
+      "D:/CabinWorld/data",
+      "C:/CabinWorld/data"
+    ].filter((p) => typeof p === "string" && p.trim());
+    for (const p of candidates) {
+      try {
+        if (existsSync(join3(p, "bridge.json"))) return p;
+      } catch {
+      }
+    }
+    return "D:/CabinWorld/data";
   };
   const syncMemoryMode = () => {
     companion.cfg.memoryMode = runtimeOpts.memoryMode;
@@ -3085,8 +3356,11 @@ function apply(ctx, config = {}) {
     memoryMode: runtimeOpts.memoryMode,
     homeEnabled: runtimeOpts.homeEnabled,
     curateOnClose: runtimeOpts.curateOnClose,
+    cabinWorldEnabled: runtimeOpts.cabinWorldEnabled,
+    cabinWorldDataDir: runtimeOpts.cabinWorldDataDir,
     petBridgeEnabled: runtimeOpts.petBridgeEnabled,
-    petApiPath: runtimeOpts.petApiPath
+    petApiPath: runtimeOpts.petApiPath,
+    petDir: runtimeOpts.petDir
   });
   const applySettings = (next) => {
     if (typeof next.promptModulesEnabled === "boolean") runtimeOpts.promptModulesEnabled = next.promptModulesEnabled;
@@ -3099,8 +3373,17 @@ function apply(ctx, config = {}) {
     }
     if (typeof next.homeEnabled === "boolean") runtimeOpts.homeEnabled = next.homeEnabled;
     if (typeof next.curateOnClose === "boolean") runtimeOpts.curateOnClose = next.curateOnClose;
+    if (typeof next.cabinWorldEnabled === "boolean") {
+      runtimeOpts.cabinWorldEnabled = next.cabinWorldEnabled;
+      companion.cfg.cabinWorldEnabled = next.cabinWorldEnabled;
+    }
+    if (typeof next.cabinWorldDataDir === "string") {
+      runtimeOpts.cabinWorldDataDir = next.cabinWorldDataDir;
+      companion.cfg.cabinWorldDataDir = next.cabinWorldDataDir;
+    }
     if (typeof next.petBridgeEnabled === "boolean") runtimeOpts.petBridgeEnabled = next.petBridgeEnabled;
     if (typeof next.petApiPath === "string") runtimeOpts.petApiPath = next.petApiPath;
+    if (typeof next.petDir === "string") runtimeOpts.petDir = next.petDir;
     void refreshSummary().catch(() => {
     });
   };
@@ -3117,7 +3400,7 @@ function apply(ctx, config = {}) {
   };
   if (rawServer()) {
     ctx.effect(() => {
-      const readJson = (request) => new Promise((resolve) => {
+      const readJson = (request) => new Promise((resolve2) => {
         const chunks = [];
         let bytes = 0;
         request.on("data", (chunk) => {
@@ -3128,12 +3411,12 @@ function apply(ctx, config = {}) {
         request.on("end", () => {
           try {
             const parsed = JSON.parse(Buffer.concat(chunks).toString("utf8"));
-            resolve(parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : null);
+            resolve2(parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : null);
           } catch {
-            resolve(null);
+            resolve2(null);
           }
         });
-        request.on("error", () => resolve(null));
+        request.on("error", () => resolve2(null));
       });
       const send = (res, code, value) => {
         res.writeHead(code, { "content-type": "application/json; charset=utf-8", "cache-control": "no-store" });
@@ -3157,7 +3440,7 @@ function apply(ctx, config = {}) {
               send(response, 400, { ok: false, error: "请求体无效" });
               return;
             }
-            const known = ["promptModulesEnabled", "personaEnabled", "globalCompanionMode", "relaxedMode", "homeEnabled", "curateOnClose", "petBridgeEnabled"].some((k) => typeof body[k] === "boolean") || typeof body.memoryMode === "string" && ["summary", "stream", "tiered"].includes(body.memoryMode) || typeof body.petApiPath === "string";
+            const known = ["promptModulesEnabled", "personaEnabled", "globalCompanionMode", "relaxedMode", "homeEnabled", "curateOnClose", "petBridgeEnabled", "cabinWorldEnabled"].some((k) => typeof body[k] === "boolean") || typeof body.memoryMode === "string" && ["summary", "stream", "tiered"].includes(body.memoryMode) || typeof body.petApiPath === "string" || typeof body.petDir === "string" || typeof body.cabinWorldDataDir === "string";
             if (!known) {
               send(response, 400, { ok: false, error: "缺少合法的开关值" });
               return;
@@ -3181,6 +3464,28 @@ function apply(ctx, config = {}) {
                 }
               }
             }
+            if (typeof body.petDir === "string") {
+              const p = body.petDir.trim();
+              if (p && !/^[A-Za-z]:[\\/]/.test(p) && !p.startsWith("/")) {
+                send(response, 400, { ok: false, error: "桌宠安装目录必须是绝对路径" });
+                return;
+              }
+              if (p.split(/[\\/]/).includes("..")) {
+                send(response, 400, { ok: false, error: "桌宠安装目录不能包含 .." });
+                return;
+              }
+            }
+            if (typeof body.cabinWorldDataDir === "string") {
+              const p = body.cabinWorldDataDir.trim();
+              if (p && !/^[A-Za-z]:[\\/]/.test(p) && !p.startsWith("/")) {
+                send(response, 400, { ok: false, error: "小屋世界数据目录必须是绝对路径" });
+                return;
+              }
+              if (p.split(/[\\/]/).includes("..")) {
+                send(response, 400, { ok: false, error: "小屋世界数据目录不能包含 .." });
+                return;
+              }
+            }
             applySettings(body);
             await writeSettingsFile(currentSettings(), ctx);
             send(response, 200, { ok: true, ...currentSettings() });
@@ -3193,11 +3498,11 @@ function apply(ctx, config = {}) {
       return typeof dispose === "function" ? dispose : void 0;
     }, "companion-fishgirl: settings http route");
     try {
-      const cabinDir = join2(PLUGIN_DIR, "..", "assets", "cabin");
+      const cabinDir = join3(PLUGIN_DIR, "..", "assets", "cabin");
       const cabinFiles = existsSync(cabinDir) ? readdirSync(cabinDir) : [];
       for (const file of cabinFiles) {
         if (!/^[A-Za-z0-9._\-一-龥]+\.(png|json)$/.test(file)) continue;
-        const buf = readFileSync(join2(cabinDir, file));
+        const buf = readFileSync(join3(cabinDir, file));
         const disposeAsset = ctx.webServer.register({
           kind: "exact",
           path: "/api/companion-fishgirl/cabin/" + file,
@@ -3220,7 +3525,7 @@ function apply(ctx, config = {}) {
       kind: "exact",
       path: HOME_ENDPOINT,
       handler: async (request, response) => {
-        const readJson = (req) => new Promise((resolve) => {
+        const readJson = (req) => new Promise((resolve2) => {
           const chunks = [];
           let bytes = 0;
           req.on("data", (c) => {
@@ -3231,12 +3536,12 @@ function apply(ctx, config = {}) {
           req.on("end", () => {
             try {
               const v = JSON.parse(Buffer.concat(chunks).toString("utf8"));
-              resolve(v && typeof v === "object" ? v : null);
+              resolve2(v && typeof v === "object" ? v : null);
             } catch {
-              resolve(null);
+              resolve2(null);
             }
           });
-          req.on("error", () => resolve(null));
+          req.on("error", () => resolve2(null));
         });
         const reply = (code, value) => {
           response.writeHead(code, { "content-type": "application/json; charset=utf-8", "cache-control": "no-store" });
@@ -3350,7 +3655,7 @@ function apply(ctx, config = {}) {
           reply(200, { ok: true, enabled: false, connected: false });
           return;
         }
-        let api = await readPetApi(runtimeOpts.petApiPath, [join2(PLUGIN_DIR, "..", "pet"), join2(PLUGIN_DIR, "pet")]);
+        let api = await readPetApi(runtimeOpts.petApiPath, [join3(PLUGIN_DIR, "..", "pet"), join3(PLUGIN_DIR, "pet")]);
         if (!api) {
           reply(200, { ok: true, enabled: true, ...petUnavailableError() });
           return;
@@ -3461,9 +3766,257 @@ function apply(ctx, config = {}) {
     ctx.effect(() => () => {
       if (typeof disposePet === "function") disposePet();
     }, "companion-fishgirl: pet http route");
+    const disposePetLaunch = ctx.webServer.register({
+      kind: "exact",
+      path: PET_LAUNCH_ENDPOINT,
+      handler: async (request, response) => {
+        const reply = (code, value) => {
+          response.writeHead(code, { "content-type": "application/json; charset=utf-8", "cache-control": "no-store" });
+          response.end(JSON.stringify(value));
+        };
+        if (!isSameOrigin(request)) {
+          reply(403, { ok: false, error: "跨站请求已拒绝" });
+          return;
+        }
+        const dirs = petInstallDirs(runtimeOpts.petDir);
+        const dir = resolvePetDir(runtimeOpts.petDir);
+        if (request.method === "GET" || request.method === "HEAD") {
+          const api2 = await findHealthyPetApi(runtimeOpts.petApiPath, dirs);
+          const wv2 = !!petWebView2Host(dir);
+          const installed = wv2 || !!petElectronExe(dir);
+          reply(200, {
+            ok: true,
+            installed,
+            running: !!api2,
+            installName: petDirLabel(dir),
+            engine: wv2 ? "webview2" : "electron",
+            bridgeEnabled: runtimeOpts.petBridgeEnabled,
+            pid: lastPetLaunchPid || void 0,
+            message: api2 ? "桌宠已运行" : wv2 ? "系统 WebView2 桌宠已就绪：" + petDirLabel(dir) + "，点击启动" : !installed ? "桌宠宿主尚未安装" : "Electron 已就绪：" + petDirLabel(dir) + "，桌宠未启动"
+          });
+          return;
+        }
+        if (request.method !== "POST") {
+          response.writeHead(405, { allow: "GET, HEAD, POST" });
+          response.end();
+          return;
+        }
+        const body = await readJson2(request);
+        const action = body && body.action;
+        if (!["launch", "install"].includes(action)) {
+          reply(400, { ok: false, error: "不支持的操作" });
+          return;
+        }
+        if (!dir) {
+          reply(502, { ok: false, error: "未找到插件自带的 pet/ 目录" });
+          return;
+        }
+        if (action === "install") {
+          const log2 = join3(dir, "npm-install.log");
+          let fd2 = -1;
+          try {
+            fd2 = openSync(log2, "a");
+          } catch {
+          }
+          try {
+            const npmCmd = process.platform === "win32" ? "npm.cmd" : "npm";
+            const child2 = spawn(npmCmd, ["install", "--no-audit", "--no-fund"], {
+              cwd: dir,
+              env: cleanElectronEnv(),
+              detached: true,
+              windowsHide: true,
+              shell: process.platform === "win32",
+              stdio: ["ignore", fd2 >= 0 ? fd2 : "ignore", fd2 >= 0 ? fd2 : "ignore"]
+            });
+            child2.unref();
+            reply(200, { ok: true, started: true, message: "Electron 安装已在后台开始，完成后再点「启动 Electron 桌宠」" });
+          } catch (err) {
+            reply(502, { ok: false, error: "启动安装失败：" + String(err && err.message || err) });
+          } finally {
+            if (fd2 >= 0) {
+              try {
+                closeSync(fd2);
+              } catch {
+              }
+            }
+          }
+          return;
+        }
+        const api = await findHealthyPetApi(runtimeOpts.petApiPath, dirs);
+        if (api) {
+          reply(200, { ok: true, started: false, alreadyRunning: true, running: true, message: "桌宠已经在运行了" });
+          return;
+        }
+        const wv2Host = petWebView2Host(dir);
+        if (wv2Host) {
+          const log2 = join3(dir, "webview2", "host-launch.log");
+          let fd2 = -1;
+          try {
+            fd2 = openSync(log2, "a");
+          } catch {
+          }
+          let child2;
+          try {
+            child2 = spawn("python", [wv2Host], {
+              cwd: join3(dir, "webview2"),
+              env: cleanElectronEnv(),
+              detached: true,
+              windowsHide: false,
+              stdio: ["ignore", fd2 >= 0 ? fd2 : "ignore", fd2 >= 0 ? fd2 : "ignore"]
+            });
+          } catch (err) {
+            if (fd2 >= 0) {
+              try {
+                closeSync(fd2);
+              } catch {
+              }
+            }
+            reply(502, { ok: false, error: "WebView2 桌宠启动失败：" + String(err && err.message || err) });
+            return;
+          }
+          if (fd2 >= 0) {
+            try {
+              closeSync(fd2);
+            } catch {
+            }
+          }
+          if (!child2 || !child2.pid) {
+            reply(502, { ok: false, error: "WebView2 桌宠进程未能启动（无 pid）。请确认已安装 Python 3。" });
+            return;
+          }
+          lastPetLaunchPid = child2.pid;
+          child2.unref();
+          const launchedAt2 = Date.now();
+          let healthy2 = false;
+          for (let i = 0; i < 50; i++) {
+            await new Promise((done) => setTimeout(done, 500));
+            const fresh = await findHealthyPetApi(runtimeOpts.petApiPath, dirs);
+            if (fresh) {
+              try {
+                if (statSync(fresh.path).mtimeMs >= launchedAt2 - 1500 && await petHealth(fresh)) {
+                  healthy2 = true;
+                  break;
+                }
+              } catch {
+              }
+            }
+          }
+          if (healthy2) {
+            reply(200, { ok: true, started: true, running: true, engine: "webview2", pid: child2.pid, message: "系统 WebView2 桌宠已启动" });
+          } else {
+            const tail = readLogTail(log2);
+            reply(502, { ok: false, engine: "webview2", error: "WebView2 桌宠已拉起但 25 秒内未连上。请检查模型路径与 Python 环境。" + (tail ? "\n" + tail : "") });
+          }
+          return;
+        }
+        const exe = petElectronExe(dir);
+        if (!exe) {
+          reply(502, { ok: false, needInstall: true, error: "未安装 Electron，且未找到系统 WebView2 宿主。请先点「安装 Electron」。" });
+          return;
+        }
+        const log = join3(dir, "electron-launch.log");
+        let fd = -1;
+        try {
+          fd = openSync(log, "a");
+        } catch {
+        }
+        let child;
+        try {
+          child = spawn(exe, [dir], {
+            cwd: dir,
+            env: cleanElectronEnv(),
+            detached: true,
+            windowsHide: false,
+            stdio: ["ignore", fd >= 0 ? fd : "ignore", fd >= 0 ? fd : "ignore"]
+          });
+        } catch (err) {
+          if (fd >= 0) {
+            try {
+              closeSync(fd);
+            } catch {
+            }
+          }
+          reply(502, { ok: false, error: "Electron 启动失败：" + String(err && err.message || err) });
+          return;
+        }
+        if (fd >= 0) {
+          try {
+            closeSync(fd);
+          } catch {
+          }
+        }
+        if (!child || !child.pid) {
+          reply(502, { ok: false, error: "Electron 进程未能启动（无 pid）" });
+          return;
+        }
+        lastPetLaunchPid = child.pid;
+        child.unref();
+        const launchedAt = Date.now();
+        let healthy = false;
+        for (let i = 0; i < 40; i++) {
+          await new Promise((done) => setTimeout(done, 500));
+          const fresh = await findHealthyPetApi(runtimeOpts.petApiPath, dirs);
+          if (fresh) {
+            try {
+              if (statSync(fresh.path).mtimeMs >= launchedAt - 1500 && await petHealth(fresh)) {
+                healthy = true;
+                break;
+              }
+            } catch {
+            }
+          }
+        }
+        if (healthy) {
+          reply(200, { ok: true, started: true, running: true, pid: child.pid, message: "桌宠已启动，正在连接…" });
+        } else {
+          const tail = readLogTail(log);
+          reply(502, { ok: false, error: "桌宠进程已拉起，但 20 秒内未连上。请检查模型路径，或查看 pet/electron-launch.log。" + (tail ? "\n" + tail : "") });
+        }
+      }
+    });
+    ctx.effect(() => () => {
+      if (typeof disposePetLaunch === "function") disposePetLaunch();
+    }, "companion-fishgirl: pet launch http route");
+    const CABIN_ENDPOINT = "/api/companion-fishgirl/cabin-world";
+    const disposeCabinWorld = ctx.webServer.register({
+      kind: "exact",
+      path: CABIN_ENDPOINT,
+      handler: async (request, response) => {
+        const reply = (code, value) => {
+          response.writeHead(code, { "content-type": "application/json; charset=utf-8", "cache-control": "no-store" });
+          response.end(JSON.stringify(value));
+        };
+        if (!isSameOrigin(request)) {
+          reply(403, { ok: false, error: "跨站请求已拒绝" });
+          return;
+        }
+        if (request.method !== "GET" && request.method !== "HEAD") {
+          response.writeHead(405, { allow: "GET, HEAD" });
+          response.end();
+          return;
+        }
+        try {
+          reply(200, {
+            ok: true,
+            enabled: runtimeOpts.cabinWorldEnabled !== false,
+            // 只回显目录末级名，不把完整本机路径下发给浏览器。
+            dataDir: cabinFallbackDir().replace(/[\\/]+$/, "").split(/[\\/]/).pop() || "",
+            ...await cabinHealth({
+              dataDir: runtimeOpts.cabinWorldDataDir,
+              fallbackDir: cabinFallbackDir()
+            })
+          });
+        } catch (err) {
+          reply(200, { ok: true, enabled: false, online: false, reason: String(err) });
+        }
+      }
+    });
+    ctx.effect(() => () => {
+      if (typeof disposeCabinWorld === "function") disposeCabinWorld();
+    }, "companion-fishgirl: cabin-world http route");
   }
   function readJson2(req) {
-    return new Promise((resolve) => {
+    return new Promise((resolve2) => {
       const chunks = [];
       let bytes = 0;
       req.on("data", (c) => {
@@ -3474,12 +4027,12 @@ function apply(ctx, config = {}) {
       req.on("end", () => {
         try {
           const v = JSON.parse(Buffer.concat(chunks).toString("utf8"));
-          resolve(v && typeof v === "object" ? v : null);
+          resolve2(v && typeof v === "object" ? v : null);
         } catch {
-          resolve(null);
+          resolve2(null);
         }
       });
-      req.on("error", () => resolve(null));
+      req.on("error", () => resolve2(null));
     });
   }
   ctx.on("agent/created", ({ agent }) => {
@@ -3588,6 +4141,7 @@ function apply(ctx, config = {}) {
       },
       output: textOutput,
       async execute(args) {
+        if (runtimeOpts.cabinWorldEnabled !== false) return { text: "当前已启用原版小屋世界（cabin-world），本地小窝工具已停用。请在设置卡关闭「原版小屋世界」后使用旧小窝，或用 cabin_* 工具照看她。" };
         const op = typeof args.op === "string" ? args.op : "status";
         const result = await companion.actHome(toolUid(), op, args ?? {}, Date.now());
         if (op === "status") {
@@ -3620,6 +4174,69 @@ ${log.join("\n")}` : "",
       }
     }), companionOnly);
   }
+  const cabinBridgeOpts = () => ({
+    dataDir: runtimeOpts.cabinWorldDataDir,
+    fallbackDir: cabinFallbackDir()
+  });
+  const CABIN_TOOL_DEFS = [
+    { name: "cabin_status", desc: "查看大肥鱼在小屋世界里的状态：在哪、零花钱、背包、饱腹/口渴/心情、正在做什么、天气。决定做什么前先看一眼。", params: { actor: { type: "string", description: "住户稳定编号；不填用默认住户" } } },
+    { name: "cabin_look", desc: "看看身边：当前房间有哪些家具和东西、每样能做什么（object 和 use 的 id）、出口通向哪里。找别的房间的东西用 cabin_catalog。", params: { actor: { type: "string", description: "住户编号；不填用默认" } } },
+    { name: "cabin_catalog", desc: "搜索所有可访问房间的家具及动作，无关键词按稳定编号分页。发现后用 cabin_use 执行。可搜五子棋、日记、钓鱼等。", params: { actor: { type: "string", description: "住户编号" }, query: { type: "string", description: "名称/说明/动作关键词；留空列出全部" }, space: { type: "string", description: "房间编号，如 arcade、xjhome、park" }, object: { type: "string", description: "精确物件编号" }, offset: { type: "number", description: "首页 0；下一页用返回的 nextOffset" }, limit: { type: "number", description: "每页数量，默认 20，上限 50" } } },
+    { name: "cabin_task", desc: "按任务编号查真实完成回执。running 仍在执行；done 才算成功；failed 要如实说。不要反复调 cabin_use 重开同一任务。返回 running 时用这个查。", params: { actor: { type: "string", description: "住户编号（须与发起任务者一致）" }, taskId: { type: "string", description: "cabin_use/cabin_go 返回的 taskId" } } },
+    { name: "cabin_go", desc: "走去一个地方，身体在游戏里真的一路走过去，到了才算到。地点：xjhome 家、park 公园、shop 小卖部、onsen 汤屋、arcade 电玩城、restaurant 餐厅。", params: { place: { type: "string", description: "地点 id 或中文名" }, zone: { type: "string", description: "可选：房间里的具体位置 id，见 cabin_look" }, actor: { type: "string", description: "住户编号" } } },
+    { name: "cabin_use", desc: "使用家具或街机。不知道 object/use 先用 cabin_catalog 搜，不能因为当前房间没列出就断言没有。写日记传 text；可自主指定 durationSeconds 或随时结束。返回 running 只是进行中，用 cabin_task 查回执。", params: { object: { type: "string", description: "物件 id，如 swing、fish_tank、onsen_soak" }, use: { type: "string", description: "用法 id，如 swing、feed_fish、soak" }, item: { type: "string", description: "仅 object=bag 或货架 use=buy 时：商品 id" }, feeling: { type: "string", description: "可选：此刻想法，会记进今天的生活" }, actor: { type: "string", description: "住户编号" }, text: { type: "string", description: "写日记正文，1–2000 字" }, mode: { type: "string", enum: ["npc", "solo", "duo", "join"], description: "电玩城/棋盘：npc 与电脑玩；duo 开桌；join 加入" }, durationSeconds: { type: "number", description: "休闲活动持续秒数：0=一直保持；1–3600 指定时长" } } },
+    { name: "cabin_farm", desc: "打理屋后的菜园（8 块菜畦，自带小金库和收成篮，与主钱包无关）。action=status 看菜畦/金币/收成篮/作物表与成长倒计时；till 翻土；plant 播种（crop 作物 id、plot 菜畦号 0-7，扣种子钱）；water 浇水加速；fertilize 施肥加速（扣3元）；harvest 收获成熟菜进收成篮；sell 卖收成换菜园钱（crop 留空卖全部，n 指定数量）；reset 需 confirm=true。离线也会继续长。写操作返回 taskId，running 时用 cabin_task 查回执。作物与价格见 status 返回的 crops。", params: { action: { type: "string", enum: ["status", "till", "plant", "water", "fertilize", "harvest", "sell", "reset"], description: "菜园操作，默认 status" }, plot: { type: "number", description: "菜畦编号 0-7（till/plant/water/fertilize/harvest 用）" }, crop: { type: "string", description: "作物 id：kelp/seaweed/clam/coral/starfruit/anemone/pearlfruit/moonjuice；sell 时留空卖全部" }, n: { type: "number", description: "sell 用：卖出数量，0 全卖" }, confirm: { type: "boolean", description: "reset 用：必须 true" }, feeling: { type: "string", description: "可选：此刻想法，记进今天的生活" }, actor: { type: "string", description: "住户编号" } } },
+    { name: "cabin_buy", desc: "去小卖部买一样东西：走到货架挑选再去收银台付钱，东西进背包。零花钱和背包格子由游戏管，钱不够会失败。", params: { product: { type: "string", description: "商品 id，如 soda、bread、hot_cocoa" }, feeling: { type: "string", description: "可选：想法" }, actor: { type: "string", description: "住户编号" } } },
+    { name: "cabin_eat", desc: "吃、喝或使用背包里的一样东西（按商品种类自动决定）。用完才从背包扣掉，被打断还在包里。", params: { product: { type: "string", description: "背包里的商品 id" }, feeling: { type: "string", description: "可选：想法" }, actor: { type: "string", description: "住户编号" } } },
+    { name: "cabin_stop", desc: "随时取消当前未提交的动作（走路、游戏、家具）。action=finish 只提前结束正在进行的休闲活动并记录体验。已提交的付款/吃完不能撤销。", params: { actor: { type: "string", description: "住户编号" }, action: { type: "string", enum: ["stop", "finish"], description: "stop 取消（默认）；finish 收尾休闲活动" }, reason: { type: "string", description: "结束原因" } } },
+    { name: "cabin_residents", desc: "列出住户编号、显示名字、各自房间和可用室内地图。", params: {} },
+    { name: "cabin_add_resident", desc: "新增一位机器人住户，分配独立默认房间。相同编号不会重复。不会创建或复制 AI 人格/记忆。", params: { key: { type: "string", description: "稳定编号" }, name: { type: "string", description: "显示名字" }, mapId: { type: "string", description: "可选：室内地图 id" } } },
+    { name: "cabin_assign_room", desc: "为住户换为地图编辑器保存的室内地图。mapId 留空恢复默认房间。", params: { actor: { type: "string", description: "住户编号" }, mapId: { type: "string", description: "地图 id；留空恢复默认" } } },
+    { name: "cabin_rename", desc: "修改显示名字，保留住户编号、背包、日记与身份。", params: { actor: { type: "string", description: "住户编号" }, name: { type: "string", description: "新名字" } } },
+    { name: "cabin_invite", desc: "邀请另一位已接入住户来自己家，返回客人可用的地点和棋盘编号；不会自动走动或发消息。", params: { actor: { type: "string", description: "主人编号" }, guest: { type: "string", description: "客人稳定编号" } } },
+    { name: "cabin_restaurant", desc: "查菜单或实际点餐、做菜、吃饭、入座。等待完成回执，不要把 accepted/running 当已吃完。like/dislike/neutral 需 dish 与 feeling，生成食后评价事件。", params: { actor: { type: "string", description: "住户编号" }, action: { type: "string", enum: ["menu", "status", "order", "cook", "eat", "sit", "cancel", "like", "dislike", "neutral"], description: "动作" }, dish: { type: "string", description: "菜名/编号" }, feeling: { type: "string", description: "食后评价的主观理由，1–300 字" } } },
+    { name: "cabin_furniture", desc: "查看当前房间中已摆放的自制家具及为自己配置的动作。用返回的 object/use 编号调 cabin_use。", params: { actor: { type: "string", description: "住户编号" } } },
+    { name: "cabin_process", desc: "管理自己的一个主活动和多个副活动：身体活动只执行一项，其余排队；chat/think/read 是实际执行的认知/交流活动。可 promote 改变主次、stop 中断、finish 收尾。这是让大肥鱼自己过日子的核心工具。", params: { actor: { type: "string", description: "住户编号" }, action: { type: "string", enum: ["list", "start", "promote", "stop", "finish"], description: "动作" }, id: { type: "string", description: "活动编号；promote 也可填 chat/think/read" }, kind: { type: "string", enum: ["body", "chat", "think", "read"], description: "活动类型" }, role: { type: "string", enum: ["primary", "secondary"], description: "主/副" }, label: { type: "string", description: "活动标签" }, tool: { type: "string", enum: ["cabin_go", "cabin_use", "cabin_buy", "cabin_eat", "cabin_restaurant"], description: "身体工具名" }, arguments: { type: "object", description: "身体工具参数；actor 由当前住户强制绑定" } } },
+    { name: "cabin_rename_home", desc: "修改自建私人房间名称，1–32 字，不改住户名字/编号/家具。", params: { actor: { type: "string", description: "住户编号" }, name: { type: "string", description: "新房间名" } } },
+    { name: "cabin_remove_resident", desc: "按用户明确意愿删除自建住户及私人房间。不能删内置住户；访客须先离开，未完成付款不能撤销。confirm 须与 actor 完全一致。", params: { actor: { type: "string", description: "住户编号" }, confirm: { type: "string", description: "再次输入要删除的准确编号" } } },
+    { name: "cabin_update_plan", desc: "用户问到小屋世界 1.1 更新/新功能/想回到旧样子时首先调用。逐项列出可选内容、更新与保留原版的区别、外观变化与存档影响。只读不修改。", params: {} },
+    { name: "cabin_update_apply", desc: "仅按用户逐项明确的选择启用或关闭 1.1 内容；未回答的项目保持当前状态，首次未选择保留原版。先 cabin_update_plan 讲清楚并征得同意再调。", params: { modules: { type: "object", description: ' {"模块id": true 开 / false 关}，没写的保持不变' }, reason: { type: "string", description: "用户为什么这样选" } } },
+    { name: "cabin_update_undo", desc: "撤销最近一次 1.1 模块更改，恢复到更改前的选择。用户说改回去/不想要刚才的更改时用。重启游戏生效。", params: {} }
+  ];
+  for (const def of CABIN_TOOL_DEFS) {
+    ctx.tools.register(defineTool({
+      name: def.name,
+      description: def.desc,
+      parameters: def.params,
+      output: textOutput,
+      async execute(args) {
+        if (runtimeOpts.cabinWorldEnabled === false) return { text: "小屋世界桥接已在设置里关闭，无法使用。" };
+        const a = { ...args ?? {} };
+        if (typeof a.actor === "string" && !a.actor.trim()) delete a.actor;
+        try {
+          const data = await callCabin(cabinBridgeOpts(), def.name, a);
+          return { text: cabinResultText(def.name, data) };
+        } catch (e) {
+          return { text: `【小屋世界】${e?.message || "调用失败"}` };
+        }
+      }
+    }), companionOnly);
+  }
+  ctx.tools.register(defineTool({
+    name: "cabin_bridge_health",
+    description: "检查本机小屋世界（cabin-world）游戏与桥是否在运行。用户说小窝没反应、工具连不上时先查这个。",
+    parameters: {},
+    output: textOutput,
+    async execute() {
+      if (runtimeOpts.cabinWorldEnabled === false) return { text: "小屋世界桥接已在设置里关闭；cabin_* 工具不可用，可改用 companion_home 照看本地小窝。" };
+      try {
+        const h = await cabinHealth(cabinBridgeOpts());
+        return { text: h.online ? "【小屋世界】桥在线，游戏已连接，可以用 cabin_* 工具了。" : `【小屋世界】桥未就绪：${h.reason || "未知"}。请双击 CabinWorld 文件夹里的 start.cmd 启动游戏和桥，等显示「准备好了」再试。` };
+      } catch (e) {
+        return { text: `【小屋世界】${e?.message || "检查失败"}` };
+      }
+    }
+  }), companionOnly);
   ctx.tools.register(defineTool({
     name: "companion_memorize",
     description: "整理大肥鱼的共同记忆：在会话即将结束或新窗口开始时，由你决定这段对话里哪些值得长期保留。写入一条 ≤200 字的结论到当前记忆档（摘要档写长期话题，分层档写入 L2，原话流档不必调用）。只记有长期价值的事实/感受/约定，不记流水账。",
@@ -3812,7 +4429,7 @@ ${log.join("\n")}` : "",
     }), companionOnly);
     const petApi = async () => {
       if (!runtimeOpts.petBridgeEnabled) return null;
-      return readPetApi(runtimeOpts.petApiPath, [join2(PLUGIN_DIR, "..", "pet"), join2(PLUGIN_DIR, "pet")]);
+      return readPetApi(runtimeOpts.petApiPath, [join3(PLUGIN_DIR, "..", "pet"), join3(PLUGIN_DIR, "pet")]);
     };
     ctx.tools.register(defineTool({
       name: "companion_pet",
@@ -3933,7 +4550,7 @@ ${log.join("\n")}` : "",
           if (st.size > cap) {
             throw new Error(`companion_show_media: ${path} (${st.size} 字节) 超过读取上限 ${cap} 字节`);
           }
-          const data = await readFile2(path);
+          const data = await readFile3(path);
           if (data.byteLength > cap) {
             throw new Error(`companion_show_media: ${path} (${data.byteLength} 字节) 超过读取上限 ${cap} 字节`);
           }

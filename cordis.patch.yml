@@ -83,6 +83,12 @@
         memoryMode: summary
         # v0.18.0 鱼鱼小窝：生活数值/种田/画册/记忆星图，侧栏面板，状态也在本地共享。
         homeEnabled: true
+        # v0.24.0 鱼鱼小窝改为 GitHub 原版 cabin-world（VADS）：插件内置桥客户端，
+        # 不接 MCP、不改 DSH 全局配置。她有真实身体/零花钱/背包/日记，由模型用
+        # cabin_* 工具主动安排生活。需先解压官方 Release 并双击 start.cmd 启动游戏桥；
+        # cabinWorldDataDir 指向解压目录的 data 文件夹，留空则自动用 D:/CabinWorld/data。
+        cabinWorldEnabled: true
+        cabinWorldDataDir: 'D:/CabinWorld/data'
         # v0.18.0 会话整理：窗口关闭后留下标记，下扇窗口打开时让大肥鱼自己挑选
         # 值得长期记住的内容（followup 一条内部任务，不额外调 LLM）。
         curateOnClose: true
