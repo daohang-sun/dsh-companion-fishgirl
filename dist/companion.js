@@ -9,6 +9,7 @@ import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
 import { readFile as readFile2, writeFile, mkdir } from "node:fs/promises";
 import { homedir as homedir2 } from "node:os";
 import { dirname, join as join2, extname, basename } from "node:path";
+import { AsyncLocalStorage } from "node:async_hooks";
 
 // src/home.ts
 var HOME_VERSION = 2;
@@ -1455,11 +1456,38 @@ ${SAFETY_BOUNDARY}`;
   if (!hasBoundary) kept.push(SAFETY_BOUNDARY);
   return kept.join("\n");
 }
+var bondLockScope = new AsyncLocalStorage();
+var BOND_WRITE_METHODS = [
+  "read",
+  "record",
+  "recordActivity",
+  "rememberTopic",
+  "recall",
+  "claimGreeting",
+  "setPreference",
+  "applyAffect",
+  "applyRomance",
+  "selfAssess",
+  "mutateEvent",
+  "forget",
+  "readHome",
+  "actHome",
+  "appendOriginal",
+  "addTier",
+  "markCurate",
+  "clearCurate"
+];
 var Companion = class extends Service {
   static inject = ["storageDomain"];
   constructor(ctx, config = {}) {
     super(ctx, "companion");
     this.listeners = /* @__PURE__ */ new Set();
+    this.bondQueues = /* @__PURE__ */ new Map();
+    for (const name of BOND_WRITE_METHODS) {
+      const orig = this[name];
+      if (typeof orig !== "function") continue;
+      this[name] = (userId, ...rest) => this.withBondLock(userId, () => orig.call(this, userId, ...rest));
+    }
     this.cfg = {
       persona: { ...DEFAULT_PERSONA, ...config.persona ?? {} },
       // v0.11.0 人格属性注入总开关（默认开）；关闭后 renderSummary 只留记忆段。
@@ -1528,6 +1556,41 @@ var Companion = class extends Service {
   }
   async [Service.init]() {
     await this.ready;
+  }
+  /**
+   * M4：在指定 uid 的串行链上跑一段 bond 读-改-写，杜绝并发 lost update。
+   * 关键设计：
+   *  - 每个 uid 一条 Promise 链，同一个 uid 的写严格前一个完成再跑下一个；
+   *  - 链尾永远 resolve（错误只影响当前调用方，不阻塞后续），避免一次异常
+   *    把整条链卡死；
+   *  - AsyncLocalStorage 记录当前调用栈已持有的 uid 集合：嵌套调用（record→read、
+   *    selfAssess→recordActivity、readHome→read）发现 uid 已在集合中就直接放行，
+   *    否则会自己等自己造成死锁。
+   */
+  withBondLock(userId, job) {
+    const key = this.resolveUserId(userId);
+    const held = bondLockScope.getStore();
+    if (held && held.has(key)) return job();
+    const prev = this.bondQueues.get(key) ?? Promise.resolve();
+    let release;
+    const gate = new Promise((r) => {
+      release = r;
+    });
+    const tail = prev.then(() => gate);
+    this.bondQueues.set(key, tail);
+    void tail.finally(() => {
+      if (this.bondQueues.get(key) === tail) this.bondQueues.delete(key);
+    }).catch(() => {
+    });
+    return prev.then(async () => {
+      const next = new Set(held ?? []);
+      next.add(key);
+      try {
+        return await bondLockScope.run(next, job);
+      } finally {
+        release();
+      }
+    });
   }
   resolveUserId(requested) {
     if (requested) return requested;

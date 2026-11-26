@@ -1,3 +1,12 @@
+## v0.23.1 · bond 串行化 + 桌宠 token 隔离 + 移出桌宠源码 · 2026-11-26
+
+- **M4 · bond 状态读-改-写串行化（多窗口并发不再丢数据）**：此前所有 bond 写方法（`record` / `recordActivity` / `rememberTopic` / `actHome` / `appendOriginal` / `addTier` 等）都是「读-改-写」，session/event 之外的入口（HTTP 小窝、工具、slash 命令）各写各的，多窗口并发时后写会覆盖先写，导致金币、种田、时间线、stream/tiered 记忆丢失。现在在 Companion 实例上给所有写方法统一加 **per-uid 可重入串行锁**（Promise 链 + `AsyncLocalStorage` 标记持有者）：同一个 uid 的写严格排队、嵌套调用（如 `selfAssess→recordActivity`）直接放行不死锁、单次异常不卡死队列、不同 uid 并行不互等。新增 `v023-bond-lock` 并发回归：20 路并发写全部保留（无锁版本只剩 1 条）。
+- **M7 · Electron 桌宠 token 不再进渲染进程**：桌宠主进程把 token 留在内存，渲染进程原先从 URL `?token=` 读取——XSS 可窃取。现在 Electron 模式改为 preload 暴露的 `petBridge.api()`，渲染进程经 IPC 让**主进程带 token 代发** `/api/*`，URL 与 window 上都没有 token；API 路径白名单、`will-navigate` 限定同源、禁止新窗口、加 CSP（`script-src 'self'`、进程垫片独立成 `shim.js`）。独立浏览器模式仍走 URL token（本机受信任场景）。新增 `v023-m7` 回归 15 项。
+- **桌宠程序移出插件仓库**：`pet/` 目录已移到上一级独立目录运行，不再随本插件分发。README 全部改为「外部独立桌宠 + 桥接协议」表述，`package.json` 的 `files` 去掉所有 `pet/*` 条目；插件这一侧的桥接功能（`petBridgeEnabled` / `petApiPath` / `companion_pet` / 面板桌宠 tab）保持不变。
+- **测试**：修正 v021 / `v023-pet-auth` 里指向仓库内旧 `pet/` 路径的 import（改指独立目录），全量回归 18 套 PASS（`verify-pet-path` 需本机真实桌宠进程，属环境依赖）。
+
+---
+
 ## v0.23.0 · 设定词/指令词总开关（默认关）+ 安全加固 · 2026-11-23
 
 - **新增「设定词 / 指令词注入」总开关（默认关，给 DeepSeek 更高自由度）**：插件写给模型的角色词、设定词、指令词此前**全部无条件注入**（静态人设 ~1600 token + 每轮动态摘要）。现在新增总开关 `promptModulesEnabled`（默认 `false`），关闭后：

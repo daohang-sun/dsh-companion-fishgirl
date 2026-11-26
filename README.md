@@ -6,8 +6,8 @@
 
 让 DeepSeek 在对话之外多一层**长期陪伴关系**：会记住你的偏好与重要往事，也会记得**在别的窗口里你送过什么、聊过什么**；随情感交流慢慢成长、有自己的心情与关系阶段，并把这些状态跨会话延续下去。所有数据留在本地、按用户隔离、可随时删除或导出。
 
-- 当前版本：**v0.23.0**
-- 运行产物：`dist/companion.js`（唯一宿主入口）+ `client.js`（子菜单、配置卡、鱼鱼小窝面板）+ `pet/`（独立 Live2D 桌宠程序）+ `assets/cabin/`（CC BY 4.0 房间素材）
+- 当前版本：**v0.23.1**
+- 运行产物：`dist/companion.js`（唯一宿主入口）+ `client.js`（子菜单、配置卡、鱼鱼小窝面板）+ `assets/cabin/`（CC BY 4.0 房间素材）。真 Live2D 桌宠是**独立程序**，不随本插件分发（见后文「真 Live2D 外部桌宠」）
 - 适用：`deepseek-ai/deepseek-harness`（dsh，Cordis 4 / 桌面端与 web profile）
 
 ---
@@ -67,7 +67,7 @@
 |---|---|
 | 🖼️ 图片 / 视频展示 | `companion_show_media` 让大肥鱼在回答里贴出本地图片/视频，或把搜索到的 HTTP(S) 图片链接交给宿主下载展示：模型只看到文本路径/URL，字节走展示通道**不进会话历史、不重复占 token**；点图放大、视频可播放 |
 | 🏠 鱼鱼小窝 | 侧栏**会动的家**：🏠 **2D 像素小屋**（使用 cabin-world 的 28 张 CC BY 4.0 烘焙房间素材 + 4×4 行走精灵，点地面走路 / 点家具互动 / 拖她移动 / 昼夜天气 / 深度分层）与 🪴 **像素院子**（可点选播种/浇水/收获）；她自己过日子（40 分钟一幕、离线补演），模型可安排做事/画画，画作进画册 |
-| 🐟 真 Live2D 桌宠 | `pet/` 独立 Electron 桌宠：真正加载你本机解压的**大肥鱼 Cubism 4 模型**（23 表情 / 8 动作 / 4K 贴图），透明置顶、点击拖拽；本机 HTTP 双向桥接让面板与模型都能发台词/表情/动作。默认桥接关，桌宠程序与模型需你本机安装 |
+| 🐟 真 Live2D 桌宠 | 独立的 Electron 桌宠程序（**不随本插件分发**，需你另行准备）：加载本机解压的**大肥鱼 Cubism 4 模型**，透明置顶、点击拖拽；本机 HTTP 双向桥接让面板与模型都能发台词/表情/动作。默认桥接关 |
 | ⚙️ 配置卡 | 设置 → 插件 → dsh-companion-fishgirl：总开关 + 分组开关 + 记忆类型下拉，即时生效 |
 
 ---
@@ -128,7 +128,7 @@ npm install --no-save "file:<插件目录>"
 
 | 开关 | 默认 | 作用 |
 |---|---|---|
-| Live2D 桌宠桥接 | 关 | 开启后连接 `pet/` 桌宠（或旧版 WHALEL2D），面板「Live2D 桌宠」tab 可发台词/表情/动作/显示；模型也能用 `companion_pet` 直接驱动。关闭不影响像素小屋与像素院子 |
+| Live2D 桌宠桥接 | 关 | 开启后连接本机正在运行的独立桌宠（或旧版 WHALEL2D），面板「Live2D 桌宠」tab 可发台词/表情/动作/显示；模型也能用 `companion_pet` 直接驱动。关闭不影响像素小屋与像素院子 |
 
 ---
 
@@ -317,7 +317,7 @@ npm install --no-save "file:<插件目录>"
 
 - **🏠 2D 像素小屋**：**使用 cabin-world 的 28 张烘焙房间素材**（VADS，CC BY 4.0，署名见文末）——床、书架、窗、画架、鱼缸、沙发、书桌、地毯、盆栽都按它 `layers.json` 的坐标与 depth 分层绘制；角色用 4×4 行走精灵表（下/左/右/上各 4 帧），**点地面寻路走过去、点家具触发对应小窝动作（床→睡、画架→画画、鱼缸→喂鱼、沙发→喝茶、书桌→写字…）、拖她换个位置**；叠昼夜色调、窗外晴/雨/雪与夜里亮起的台灯。逻辑分辨率 960×640，像素整数放大不糊。
 - **🪴 像素院子**：3×3 菜畦可点选播种/浇水/收获，种子铺、背包与厨房也放进同一套海洋玻璃卡片。窄屏页签横向滚动，卡片自动减列。
-- **🐟 真 Live2D（可选）**：`pet/` 目录自带桌宠程序，真正加载你本机的大肥鱼 Cubism 4 模型。详见下一章。
+- **🐟 真 Live2D（可选）**：可连接一个独立的桌宠程序（不随插件分发），真正加载你本机的大肥鱼 Cubism 4 模型。详见下一章。
 
 ### 她自己过日子
 
@@ -349,27 +349,33 @@ npm install --no-save "file:<插件目录>"
 
 ## 真 Live2D 外部桌宠 + 双向桥接（可选）
 
-面板内的像素小屋**不是真 Live2D**。要真正的 Live2D 形象，本插件在 `pet/` 里带了一个**独立桌宠程序**，它真正加载**你自己提供的**大肥鱼 Cubism 4 模型。
+面板内的像素小屋**不是真 Live2D**。要真正的 Live2D 形象，可以连接一个**独立的桌宠程序**——它是一个单独的程序，**不随本插件分发，也不在插件仓库内**。本插件只提供「桥接」这一侧：通过本机 HTTP 与桌宠交换状态、台词、表情、动作。桌宠程序本身可用任意符合下述协议的实现（社区已有的 DeepFish / WHALEL2D，或你自己搭建的 Electron 桌宠），它加载**你自己提供的**大肥鱼 Cubism 4 模型。
 
-### 它能做什么
+> 若你已有可用的桌宠程序，跳过「桌宠程序」部分，直接看下方「开桥接」。
 
-- **真正加载模型**：`大肥鱼.model3.json` + `.moc3`（moc3 v5 / Cubism 5）+ 贴图 + `physics3.json`，用 pixi-live2d-display 在 Electron 透明置顶窗口里渲染（PixiJS 7.4.3 + Cubism Web R7，Core 5.x 与 moc3 v5 匹配）。原始 `model3.json` 没有 Expressions/Motions 字段——桌宠服务自动扫描 `Exp3/` 与 `Animation/` 生成增强版 manifest，于是 **23 个表情**（脸红/爱心眼/圈圈眼/黑脸/流泪/兔牙/单片眼镜…）与 **8 个动作**（IDLE/举手/狗尾草/竖手指/脱捕…）都能播放，物理摆动照常。
-- **自动处理模型兼容**：启动时把超限贴图（原始最高 8192×8192，超过很多真机 WebGL 上限）用纯 Node 零依赖方式缩到 **≤2048**，缓存到 `pet/.texcache/`（按模型 hash 隔离、可复用），`runtime.model3.json` 自动指向缓存；原模型目录只读。加载时把 Cubism 5 模型的蒙版数（49 组）按 `renderTextureCount=2`（上限 64）和 2048 的蒙版缓冲初始化，避免五官/头发遮罩串位与边缘毛边；切换表情前复位自定义参数、离散开关首帧直接写值，避免多个表情叠加残留。**这些修复都只改运行时，不动模型文件**。
-- **交互**：透明无边框、置顶、可拖动（拖动按帧合并 IPC，不闪）；点她会触发表情与动作；托盘可显示/隐藏、切鼠标穿透、退出。
-- **双向桥接**：桌宠本机 HTTP（只监听 127.0.0.1、Bearer token）暴露 `/api/state`（当前表情/动作/显示状态 + 表情动作目录）、`/api/commands`（插件→桌宠命令队列）、`/api/events`（桌宠→插件事件队列）、`/api/action`、`/api/reload`，并兼容旧 `/say`、`/call/<tool>`。面板与模型都能发台词、表情、动作；面板还能读到桌宠点击/拖拽事件。
+### 桥接协议（本插件这一侧）
+
+- **本机 HTTP**：桌宠在 `127.0.0.1` 上提供服务、用 Bearer token 鉴权，暴露 `/api/state`（当前表情/动作/显示状态 + 表情动作目录）、`/api/commands`（插件→桌宠命令队列）、`/api/events`（桌宠→插件事件队列）、`/api/action`、`/api/reload`，并兼容旧 `/say`、`/call/<tool>`。面板与模型都能发台词、表情、动作；面板还能读到桌宠点击/拖拽事件。
 - **共享临场意图（presence）**：一份「表情 + 动作 + 短气泡」的意图可同时作用于 Live2D 桌宠和面板里的像素小屋/院子，让两种形象表现同一状态（带去重与过期，重连不重播）。面板桌宠 tab 有「临场意图」入口，模型可用 `companion_pet` 的 `op=presence` 主动触发。
-- **安全**：`api.json` 的 token **只在 dsh 宿主进程与桌宠进程之间使用，绝不下发浏览器客户端**；面板只调本插件的 `/api/companion-fishgirl/pet` 路由。
+- **安全**：桌宠 `api.json` 的 token **只在 dsh 宿主进程与桌宠进程之间使用，绝不下发浏览器客户端**；桌宠地址必须为本机回环地址；面板只调本插件的 `/api/companion-fishgirl/pet` 路由。
 
-### 怎么启动
+### 桌宠程序（需你另行准备）
 
-1. **解压模型**：把 `DeepSeek免费公皮.zip` 里的 `DeepSeek` 文件夹解压到任意目录（里面有 `大肥鱼.model3.json` 和 `.moc3`）。**本插件不打包、不分发模型文件**——只读你自己解压的目录。
-2. **配置路径**：把 `pet/config.example.json` 复制为 `pet/config.json`，填 `modelPath` 为该目录（也可在启动时用环境变量 `DSH_FISH_MODEL` 指定）。
-3. **启动桌宠**：双击 `pet/start.cmd`（零依赖、离线，用系统 Chrome/Edge 的应用窗口打开；想用透明置顶窗口且网络可用时改用 `start-electron.cmd`）。桌宠启动后自动在 `pet/api.json` 写下 `{ url, token }`。
-4. **开桥接（二选一，即时生效无需重启 dsh）**：
+一个兼容的桌宠程序通常做这些事（供自建或选用现成实现时参考）：
+
+- **加载模型**：`大肥鱼.model3.json` + `.moc3` + 贴图 + `physics3.json`，用 pixi-live2d-display 在透明置顶窗口里渲染。原始 `model3.json` 没有 Expressions/Motions 字段时可扫描 `Exp3/` 与 `Animation/` 生成增强版 manifest，以支持多个表情与动作。
+- **模型兼容处理**：贴图若超过真机 WebGL 上限需降采样并缓存；Cubism 5 模型蒙版组多时要提高 `renderTextureCount` 与蒙版缓冲；切换表情前复位自定义参数，避免叠加残留。**这些只改运行时，不动模型文件**。
+- **交互**：透明无边框、置顶、可拖动；点她触发表情动作；托盘显示/隐藏、鼠标穿透、退出。
+- **Electron 窗口**：若用 Electron 承载，token 应只留在主进程，渲染进程经 preload IPC 代理访问本机 API，URL 不带 token，并配置 CSP 与导航白名单。
+
+### 开桥接（即时生效，无需重启 dsh）
+
+1. **准备 `api.json`**：桌宠启动后会在其目录写下 `{ url, token }`（例如 `http://127.0.0.1:18731`）。旧版 WHALEL2D/DeepFish 桌宠也能通过 `/say`、`/call/<tool>` 兼容接入。
+2. **开桥接（二选一）**：
    - **最快**：在侧栏「🐟 鱼鱼小窝 → Live2D 桌宠」tab，顶部卡片会显示橙色「桥接未开启」，下面有 **「一键开启桥接」** 按钮，点一下即可。
    - **或在设置卡**：dsh 左侧栏「插件」→ 找到 dsh-companion-fishgirl → 详情页底部的配置卡里打开 **「Live2D 桌宠桥接」** 开关。  
-     开好后该 tab 会显示绿色「已连接 · 大肥鱼真 Live2D」、真实表情/动作目录与点击/拖拽事件流；模型也可用 `companion_pet` 工具直接驱动。
-5. **装在不同机器/目录**：用 `petApiPath` 指定 `api.json` 的绝对路径即可。旧版 WHALEL2D/DeepFish 桌宠仍能通过 `/say`、`/call/<tool>` 兼容接入。
+     开好后该 tab 会显示绿色「已连接 · 大肥鱼真 Live2D」；模型也可用 `companion_pet` 工具直接驱动。
+3. **装在不同机器/目录**：用 `petApiPath` 指定 `api.json` 的绝对路径即可。
 
 ### 合规与署名（务必阅读）
 
@@ -691,7 +697,7 @@ token 估算按中英文字符折算的近似值（中文 ~0.6 tok/字），相�
 | `homeEnabled`                  | true              | 是否启用鱼鱼小窝面板与 `companion_home` 工具。**可在设置卡改**                                                                         |
 | `curateOnClose`                | true              | 窗口关闭后是否留「待整理」标记、下扇窗口打开时让模型自己挑值得长期记住的内容。**可在设置卡改**                                                                  |
 | `petBridgeEnabled`             | false             | 是否启用 Live2D 桌宠桥接。开启后从本机桌宠 api.json 读地址+token；新版桌宠支持状态/表情/动作/事件双向同步，旧版走 `/say` `/call` 兼容；token 绝不下发到客户端。**可在设置卡改** |
-| `petApiPath`                   | `''`              | 桌宠 `api.json` 路径（绝对或相对用户目录）。留空时自动找 `pet/api.json`、`%USERPROFILE%/大肥鱼插件`、旧桌宠常见目录                                    |
+| `petApiPath`                   | `''`              | 桌宠 `api.json` 路径（绝对或相对用户目录）。留空时自动找 `%USERPROFILE%/大肥鱼插件`、旧桌宠常见目录                                               |
 | `allowMutations`               | true              | 是否给模型可变工具                                                                                                          |
 | `toolUserId` / `commandUserId` | `''`              | 显式用户键；留空则统一用匿名 home id                                                                                             |
 
@@ -713,7 +719,7 @@ token 估算按中英文字符折算的近似值（中文 ~0.6 tok/字），相�
 
 ### 本地接口与文件访问边界
 
-- **桌宠只连本机**：`pet/api.json` 里的地址必须是回环地址（`127.0.0.1` / `localhost`），否则插件拒绝连接——避免 Bearer token 被发往第三方主机。
+- **桌宠只连本机**：桌宠 `api.json` 里的地址必须是回环地址（`127.0.0.1` / `localhost`），否则插件拒绝连接——避免 Bearer token 被发往第三方主机。
 - **配置接口防跨站**：设置、小窝、星图、桌宠代理等本地路由会校验 `Origin` 与 `Host`，跨站请求一律 403（恶意网页无法改你的开关或读你的数据）。
 - **媒体展示有边界**：`companion_show_media` 只接受绝对路径，拒绝 `.ssh`/`.aws`/系统目录等受保护位置，先 `stat` 再读字节；URL 下载只允许 http(s)、逐跳校验不落到内网、限制体积与超时。
 - **写入记忆的文本会清洗**：模型写入的话题名/结论统一去控制字符并限长，避免把任意文本变成下一轮的提示词。
@@ -759,8 +765,8 @@ npm run build
 | 鱼鱼窝                     | [Yuuyuko-uu/dsh-fish-home](https://github.com/Yuuyuko-uu/dsh-fish-home)                                                                       | 小窝玩法：生活数值、种田、做饭与防刷；自主生活：「手里这件事到点了才换下一件」、生活流、画架产出进画册。未采用其 3D 房间、Live2D/MMD 模型、SSE 事件桥与独立进程                                                                                           |
 | cabin-world             | [BabyBus2022/cabin-world](https://github.com/BabyBus2022/cabin-world)（VADS，MIT 代码 / CC BY 4.0 美术）                                             | 2D 像素小屋：直接使用其 28 张烘焙房间 PNG 与 `layers.json` 坐标/深度（`assets/cabin/`，署名 VADS + CC BY 4.0），角色用其 4×4 行走精灵；在其美术基础上加自己的寻路/家具互动/昼夜天气。未使用其 Godot 游戏与桥协议                                       |
 | feiyu-room-template     | [sh2234113/feiyu-room-template](https://github.com/sh2234113/feiyu-room-template)                                                             | 3D 房间（Three.js）+ 菜园 + 电视陪伴的参考；本插件未采用 3D 引擎或它的 `.glb` 模型（体积/宿主兼容/授权考虑），改用自包含 Canvas 像素小屋                                                                                             |
-| DeepFish / WHALEL2D 桌宠  | [Rockau/DeepFish-desktop-pet](https://github.com/Rockau/DeepFish-desktop-pet)、[Ssssshaiiko/WHALEL2D](https://github.com/Ssssshaiiko/WHALEL2D) | 桥接思路（`api.json` + `/say` + `〔动作〕` 台词）；本插件自带 `pet/` 桌宠程序并保留对其旧协议的兼容。其 PolyForm 非商用模型不在仓库，未使用                                                                                         |
-| 大肥鱼 Live2D 模型           | 神宫凉子免费配布（原画：神宫凉子；建模：霓虹猫_NeonNeko）                                                                                                             | `pet/` 桌宠加载的真实 Cubism 4 模型来源。个人使用/创作可，禁止二次销售与擅自再分发；本插件不含模型文件，只读用户自己解压的目录                                                                                                            |
+| DeepFish / WHALEL2D 桌宠  | [Rockau/DeepFish-desktop-pet](https://github.com/Rockau/DeepFish-desktop-pet)、[Ssssshaiiko/WHALEL2D](https://github.com/Ssssshaiiko/WHALEL2D) | 桥接思路（`api.json` + `/say` + `〔动作〕` 台词）；本插件保留对这两个桌宠旧协议的兼容，桌宠程序需你另行安装。其 PolyForm 非商用模型不在仓库，未使用                                                                                         |
+| 大肥鱼 Live2D 模型           | 神宫凉子免费配布（原画：神宫凉子；建模：霓虹猫_NeonNeko）                                                                                                             | 独立桌宠程序加载的真实 Cubism 4 模型来源。个人使用/创作可，禁止二次销售与擅自再分发；本插件不含模型文件，只读用户自己解压的目录                                                                                                            |
 | dsh-1024-game           | [akiwu/dsh-1024-game](https://github.com/akiwu/dsh-1024-game)                                                                                 | 面板挂载方式：`main`(keyed) + `sidebar.panellist`(list) 两个 slot、侧栏入口与主题变量用法                                                                                                                |
 | dsh-htmlui              | [mostkia/dsh-htmlui](https://github.com/mostkia/dsh-htmlui)                                                                                   | 「模型写 HTML / 沙箱 iframe / 双向通信 / 跨会话持久化」的面板思路参考；本插件选择自包含 React 面板，未引入该插件，故不依赖它的模板/桥接体系                                                                                                |
 | AstrBot 大肥鱼「记忆星海」       | 由用户在历史对话中提供（深蓝星域记忆星图）                                                                                                                         | 记忆星图：节点=记忆原子、连线=话题/时间、越重要越靠中心的星域观感；纯 SVG 只读视图，未接 AstrBot 生态                                                                                                                         |

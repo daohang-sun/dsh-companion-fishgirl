@@ -25,6 +25,7 @@ import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs'
 import { readFile, writeFile, mkdir } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { dirname, join, extname, basename } from 'node:path'
+import { AsyncLocalStorage } from 'node:async_hooks'
 import { blankHome, normalizeHome, tickHome, homeAction, homeSnapshot,
   cropById, recipeById, CROPS, RECIPES, ACTIVITIES, PALETTES } from './home'
 import { normalizeMode, appendStream, searchStream, traceStream, blankTiers, normalizeTiers,
@@ -518,11 +519,36 @@ function trimPersonaPrefix(text, personaEnabled, relaxedMode, promptModulesEnabl
   return kept.join('\n')
 }
 
+// ── M4：bond 状态串行化 ─────────────────────────────────────────────────────
+// bond 状态全是「读-改-写」：多窗口 / 多入口（HTTP 小窝、工具、slash 命令、
+// session/event 钩子）并发时，后一次读到的还是旧值，写回就把前一次的更新冲掉
+// （金币、种田、记忆时间线、stream/tiered 都可能丢）。
+// 这里给每个 uid 排一条 Promise 链，所有写路径进链串行执行；用 AsyncLocalStorage
+// 标记「当前已在某 uid 的锁里」，让方法之间的嵌套调用（selfAssess→recordActivity、
+// record→read、actHome→readHome 等）可重入，避免自己锁死自己。
+const bondLockScope = new AsyncLocalStorage()
+const BOND_WRITE_METHODS = [
+  'read', 'record', 'recordActivity', 'rememberTopic', 'recall', 'claimGreeting',
+  'setPreference', 'applyAffect', 'applyRomance', 'selfAssess', 'mutateEvent',
+  'forget', 'readHome', 'actHome', 'appendOriginal', 'addTier', 'markCurate', 'clearCurate',
+]
+
 class Companion extends Service {
   static inject = ['storageDomain']
   constructor(ctx, config = {}) {
     super(ctx, 'companion')
     this.listeners = new Set()
+    // M4：每个 uid 一条串行链（尾 Promise）。AsyncLocalStorage 记录「当前调用栈
+    // 已持有哪把 uid 锁」，用于可重入判断——同一个锁内的嵌套写直接放行，不排队。
+    this.bondQueues = new Map()
+    // 把所有写 bond 的方法统一包进 per-uid 串行链。包在实例上（遮蔽原型），
+    // 这样方法之间的嵌套调用也会走锁，并由可重入判断放行。
+    for (const name of BOND_WRITE_METHODS) {
+      const orig = this[name]
+      if (typeof orig !== 'function') continue
+      this[name] = (userId, ...rest) =>
+        this.withBondLock(userId, () => orig.call(this, userId, ...rest))
+    }
     this.cfg = {
       persona: { ...DEFAULT_PERSONA, ...(config.persona ?? {}) },
       // v0.11.0 人格属性注入总开关（默认开）；关闭后 renderSummary 只留记忆段。
@@ -596,6 +622,38 @@ class Companion extends Service {
   async [Service.init]() {
     // Kept for class-style loading compatibility; normal path uses this.ready.
     await this.ready
+  }
+  /**
+   * M4：在指定 uid 的串行链上跑一段 bond 读-改-写，杜绝并发 lost update。
+   * 关键设计：
+   *  - 每个 uid 一条 Promise 链，同一个 uid 的写严格前一个完成再跑下一个；
+   *  - 链尾永远 resolve（错误只影响当前调用方，不阻塞后续），避免一次异常
+   *    把整条链卡死；
+   *  - AsyncLocalStorage 记录当前调用栈已持有的 uid 集合：嵌套调用（record→read、
+   *    selfAssess→recordActivity、readHome→read）发现 uid 已在集合中就直接放行，
+   *    否则会自己等自己造成死锁。
+   */
+  withBondLock(userId, job) {
+    const key = this.resolveUserId(userId)
+    const held = bondLockScope.getStore()
+    if (held && held.has(key)) return job()
+    const prev = this.bondQueues.get(key) ?? Promise.resolve()
+    let release
+    const gate = new Promise((r) => { release = r })
+    const tail = prev.then(() => gate)
+    this.bondQueues.set(key, tail)
+    void tail.finally(() => {
+      if (this.bondQueues.get(key) === tail) this.bondQueues.delete(key)
+    }).catch(() => {})
+    return prev.then(async () => {
+      const next = new Set(held ?? [])
+      next.add(key)
+      try {
+        return await bondLockScope.run(next, job)
+      } finally {
+        release()
+      }
+    })
   }
   resolveUserId(requested) {
     if (requested) return requested
