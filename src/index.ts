@@ -1971,8 +1971,13 @@ export function apply(ctx, config = {}) {
     const env = { ...process.env }
     for (const k of Object.keys(env)) {
       const lk = k.toLowerCase()
-      if (lk === 'node_options' || lk === 'node_extra_ca_certs' || lk.includes('experimental') || lk === 'electron_run_as_node') delete env[k]
+      // 清掉宿主注入的 shim 变量；它们会破坏子进程里的 Node 启动。
+      if (lk === 'node_options' || lk === 'node_extra_ca_certs' || lk.includes('experimental')) delete env[k]
     }
+    // 关键：dsh 是 Electron，process.execPath 指向 Electron 二进制。
+    // 必须显式设 ELECTRON_RUN_AS_NODE=1，它才会以 Node 模式执行 .mjs；
+    // 否则 Electron 会把脚本当 GUI 应用入口，静默失败（表现就是"点击没反应"）。
+    env.ELECTRON_RUN_AS_NODE = '1'
     const child = spawn(process.execPath, [script], { cwd: dir, env, detached: true, stdio: 'ignore', windowsHide: false })
     child.unref()
     child.on('error', (err) => ctx.logger.warn(`companion: pet launch failed: ${String(err)}`))

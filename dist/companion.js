@@ -2885,8 +2885,9 @@ function apply(ctx, config = {}) {
     const env = { ...process.env };
     for (const k of Object.keys(env)) {
       const lk = k.toLowerCase();
-      if (lk === "node_options" || lk === "node_extra_ca_certs" || lk.includes("experimental") || lk === "electron_run_as_node") delete env[k];
+      if (lk === "node_options" || lk === "node_extra_ca_certs" || lk.includes("experimental")) delete env[k];
     }
+    env.ELECTRON_RUN_AS_NODE = "1";
     const child = spawn(process.execPath, [script], { cwd: dir, env, detached: true, stdio: "ignore", windowsHide: false });
     child.unref();
     child.on("error", (err) => ctx.logger.warn(`companion: pet launch failed: ${String(err)}`));

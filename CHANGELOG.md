@@ -1,3 +1,10 @@
+## v0.24.1 · 修复一键启动桌宠点击无反应 · 2026-11-27
+
+- **修复「一键启动桌宠」点击无反应**：dsh 本体是 Electron 应用，`process.execPath` 指向 `DeepSeek Harness.exe`。此前启动逻辑显式删除了 `ELECTRON_RUN_AS_NODE`，导致 Electron 以 GUI 模式把 `launch.mjs` 当应用入口加载，脚本从未执行；`stdio:'ignore'` 又吞掉错误，表现出来就是「点了没反应、桌宠永远不连」。现在启动子进程时显式设置 `ELECTRON_RUN_AS_NODE=1`，让 Electron 以 Node 模式执行启动脚本，桌宠可被真正拉起。实测确认 server 正常监听 18731。
+- **测试**：新增 `v024-electron-launch`（5 项），锁定「用 process.execPath + 设 ELECTRON_RUN_AS_NODE=1 + 不清掉它」三处约束，防止回归。
+
+---
+
 ## v0.24.0 · 面板体验改造：3D 星图 / 自主画作 / 日记 / 一键启动桌宠 · 2026-11-26
 
 - **Live2D 一键启动**：面板「Live2D 桌宠」页新增「一键启动桌宠」按钮，直接从 DSH 拉起本机桌宠进程（默认 `launch.mjs`，可选 `server-only.mjs`）。安全边界：只执行白名单脚本、目录来自设置里的 `petDir` / `petApiPath` / 已知安装位置、清掉宿主注入的 `NODE_OPTIONS` 等变量、启动后轮询等待连接；跨站请求仍 403。新增设置项 `petDir`（含 `launch.mjs` 的桌宠目录绝对路径，留空自动探测），`companion_pet op=launch` 同步可用。
