@@ -339,7 +339,7 @@ window.__ModuleLoader__.load({
         h('div', { className: 'cfgs-row' },
           h('div', { className: 'cfgs-label' },
             h('span', { className: 'cfgs-title' }, '桌宠目录'),
-            h('span', { className: 'cfgs-desc' }, '含 launch.mjs 的桌宠目录绝对路径，用于面板「一键启动桌宠」。留空则自动探测。')),
+            h('span', { className: 'cfgs-desc' }, '含 launch-electron.mjs 的桌宠目录绝对路径，用于面板「一键启动桌宠」。留空则自动探测。')),
           h('div', { style: { display: 'flex', gap: 6, alignItems: 'center', maxWidth: '56%' } },
             h('input', {
               type: 'text', 'aria-label': '桌宠目录', placeholder: '留空自动探测',
@@ -2114,7 +2114,7 @@ window.__ModuleLoader__.load({
                 h('span', { className: 'fh-feed-x' }, label))
             }))) : null,
           h('div', { className: 'fh-sub', style: { lineHeight: 1.6, padding: '0 2px' } },
-            '桌宠是独立程序，加载你本机解压的大肥鱼 Live2D 模型。点上方「一键启动桌宠」就能直接从 DSH 打开；也可在设置里指定桌宠目录或 api.json 路径。模型版权与署名见 README。'))
+            '桌宠是独立程序，加载你本机解压的大肥鱼 Live2D 模型。点上方「一键启动桌宠」默认打开 Electron 透明桌宠窗口（无边框、可置顶、可穿透）；模型与渲染都在这台机器上。也可让模型用 companion_pet 的 mode=browser/server 选浏览器窗口或仅本机服务。模型版权与署名见 README。'))
         : null,
 
       )

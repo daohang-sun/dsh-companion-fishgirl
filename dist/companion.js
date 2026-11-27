@@ -1079,7 +1079,7 @@ function resolvePetDir(petDir, configuredApi, extraDirs = []) {
     seen.add(dir);
     try {
       if (!statSync(dir).isDirectory()) continue;
-      if (existsSync(join(dir, "launch.mjs"))) return dir;
+      if (existsSync(join(dir, "launch-electron.mjs")) || existsSync(join(dir, "launch.mjs"))) return dir;
     } catch {
     }
   }
@@ -2869,9 +2869,9 @@ function apply(ctx, config = {}) {
     petApiPath: typeof config.petApiPath === "string" ? config.petApiPath : "",
     petDir: typeof config.petDir === "string" ? config.petDir : ""
   };
-  const PET_LAUNCH_SCRIPTS = /* @__PURE__ */ new Set(["launch.mjs", "server-only.mjs"]);
-  const launchPetProcess = async (mode = "app") => {
-    const scriptName = mode === "server" ? "server-only.mjs" : "launch.mjs";
+  const PET_LAUNCH_SCRIPTS = /* @__PURE__ */ new Set(["launch-electron.mjs", "launch.mjs", "server-only.mjs"]);
+  const launchPetProcess = async (mode = "electron") => {
+    const scriptName = mode === "server" ? "server-only.mjs" : mode === "browser" || mode === "app" ? "launch.mjs" : "launch-electron.mjs";
     if (!PET_LAUNCH_SCRIPTS.has(scriptName)) throw new Error("不支持的启动方式");
     const dir = resolvePetDir(
       runtimeOpts.petDir,
@@ -3543,7 +3543,8 @@ function apply(ctx, config = {}) {
                 } catch {
                 }
               }
-              const launched = await launchPetProcess(launchBody.mode === "server" ? "server" : "app");
+              const launchMode = ["electron", "browser", "app", "server"].includes(launchBody.mode) ? launchBody.mode : "electron";
+              const launched = await launchPetProcess(launchMode);
               reply(200, { ok: true, started: true, ...launched });
             } catch (err) {
               reply(500, { ok: false, error: String(err && err.message || err) });
@@ -4021,6 +4022,7 @@ ${log.join("\n")}` : "",
       description: "操作你的 Live2D 桌宠（桌面上的大肥鱼形象）：让它做出表情、动作、说话，或收起/显示。op=launch 可从 DSH 直接启动本机桌宠；op=presence 可下发一份「临场意图」（表情+动作+短气泡同时作用于桌宠，让两种形象表现同一状态）；op=list 先看可用的表情与动作名；op=status 查当前状态。表情/动作用中文名（如 脸红/爱心眼/流泪、IDLE/默认手切举手）。仅大肥鱼模式可用。",
       parameters: {
         op: { type: "string", description: "操作：launch|list|status|say|presence|expression|motion|show|hide|focus" },
+        mode: { type: "string", description: "launch 用：electron（默认，透明桌宠窗口）/ browser（浏览器窗口）/ server（仅本机服务，无窗口）" },
         text: { type: "string", description: "say / presence 时她说的话（短气泡）" },
         name: { type: "string", description: "expression/motion 的名字（list 返回的 name）" },
         expression: { type: "string", description: "presence 时的表情名" },
@@ -4031,7 +4033,8 @@ ${log.join("\n")}` : "",
         const op = typeof args.op === "string" ? args.op : "status";
         if (op === "launch") {
           try {
-            const r = await launchPetProcess(args.mode === "server" ? "server" : "app");
+            const launchMode = ["electron", "browser", "app", "server"].includes(args.mode) ? args.mode : "electron";
+            const r = await launchPetProcess(launchMode);
             return { text: `已从 DSH 启动桌宠（${r.dir}）。${r.message} 若桥接未开，先说一声我来开启。` };
           } catch (err) {
             return { text: "启动桌宠失败：" + String(err && err.message || err) };

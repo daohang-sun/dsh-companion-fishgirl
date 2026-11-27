@@ -122,7 +122,8 @@ export function resolvePetDir(petDir, configuredApi, extraDirs = []) {
     seen.add(dir)
     try {
       if (!statSync(dir).isDirectory()) continue
-      if (existsSync(join(dir, 'launch.mjs'))) return dir
+      // 默认 Electron 启动用 launch-electron.mjs；也接受旧的 launch.mjs 目录。
+      if (existsSync(join(dir, 'launch-electron.mjs')) || existsSync(join(dir, 'launch.mjs'))) return dir
     } catch { /* 继续找下一个 */ }
   }
   return null

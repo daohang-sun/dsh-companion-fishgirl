@@ -1,3 +1,11 @@
+## v0.24.2 · 桌宠默认 Electron 启动 + 修复渲染白屏 · 2026-11-27
+
+- **一键启动默认 Electron 透明桌宠**：此前默认走 `launch.mjs`（Chrome `--app` 浏览器窗口，带标题栏、非置顶）。现在默认执行 `launch-electron.mjs`（无边框、透明、置顶、可鼠标穿透的 Electron 桌宠）；浏览器/无窗口模式保留为可选：`companion_pet op=launch` 的 `mode=electron`（默认）/ `browser` / `server`，HTTP 路由同步透传。白名单扩为三个脚本，`resolvePetDir` 同时识别 `launch-electron.mjs` 与 `launch.mjs`。设置卡/面板/README 文案同步。
+- **修复桌宠渲染白屏「Live2D 运行未加载」**（pet 侧 `server.mjs`）：静态资源白名单漏了 `shim.js`——它是 `pixi-live2d-display` UMD 所需的 `process.env.NODE_ENV` 垫片，`index.html` 引用它却返回 404，导致 `cubism4.min.js` 加载失败、`PIXI.live2d` 未挂载、渲染页白屏。已补白名单，实测 `shim.js` 返回 200。（pet 目录不随插件分发，此修复在外部 `pet/` 目录，下次启动桌宠即生效。）
+- **测试**：`v024-electron-launch` 扩到 9 项（锁定默认 electron、白名单、mode 映射）；修正 `v024-launch` 的旧 `app` 回退断言；全量回归 22 PASS / 1 FAIL（verify-pet-path 环境依赖）。
+
+---
+
 ## v0.24.1 · 修复一键启动桌宠点击无反应 · 2026-11-27
 
 - **修复「一键启动桌宠」点击无反应**：dsh 本体是 Electron 应用，`process.execPath` 指向 `DeepSeek Harness.exe`。此前启动逻辑显式删除了 `ELECTRON_RUN_AS_NODE`，导致 Electron 以 GUI 模式把 `launch.mjs` 当应用入口加载，脚本从未执行；`stdio:'ignore'` 又吞掉错误，表现出来就是「点了没反应、桌宠永远不连」。现在启动子进程时显式设置 `ELECTRON_RUN_AS_NODE=1`，让 Electron 以 Node 模式执行启动脚本，桌宠可被真正拉起。实测确认 server 正常监听 18731。
