@@ -4,162 +4,148 @@ import { defineDomain, domainTable } from "@deepseek-ai/dsh-storage-domain";
 import { getOrCreateAnonymousUserId } from "@deepseek-ai/dsh-anonymous-user-id";
 import { defineTool } from "@deepseek-ai/dsh-tools";
 
-// src/cabin-bridge.ts
-import { readFile } from "node:fs/promises";
-import { isAbsolute, resolve, dirname, join } from "node:path";
+// src/room3d-client.ts
+import { isAbsolute, resolve } from "node:path";
+import { existsSync } from "node:fs";
 var LOOPBACK = /^(127\.0\.0\.1|localhost|\[::1\]|::1)$/i;
-var DEFAULT_PORT = 18790;
-var MAX_TIMEOUT_MS = 12e4;
+var DEFAULT_PORT = 13100;
+var DEFAULT_DIR = "D:/FeiyuRoom3D";
+var MAX_TIMEOUT_MS = 15e3;
 var MAX_TEXT = 240;
-var MAX_LINES = 60;
-var SENSITIVE_KEY = /(token|secret|password|api.?key|authorization|cookie|credential)/i;
-function normalizeDataDir(input, fallback) {
+var MAX_LINES = 80;
+var SENSITIVE_KEY = /(token|secret|password|api.?key|authorization|cookie|credential|config\.json)/i;
+function normalizeDir(input, fallback) {
   const raw = typeof input === "string" && input.trim() ? input.trim() : fallback;
   if (!raw) return "";
   const p = isAbsolute(raw) ? raw : resolve(raw);
   if (p.split(/[\\/]/).includes("..")) return "";
   return p;
 }
-async function expectedPort(dataDir) {
-  try {
-    const cfgPath = join(dirname(dataDir), "bridge", "bridge.config.json");
-    const cfg = JSON.parse(await readFile(cfgPath, "utf8"));
-    const port = Number(cfg?.http?.port);
-    if (Number.isInteger(port) && port > 0 && port < 65536) return port;
-  } catch {
-  }
-  return DEFAULT_PORT;
+function safePort(input) {
+  const p = Number(input);
+  return Number.isInteger(p) && p > 1024 && p < 65536 ? p : DEFAULT_PORT;
 }
-async function safeBridgeUrl(dataDir, rawUrl) {
-  let url;
-  try {
-    url = new URL(String(rawUrl || `http://127.0.0.1:${DEFAULT_PORT}`));
-  } catch {
-    throw new Error("小屋世界 bridge.json 里的地址无效，请重启桥。");
-  }
-  if (url.protocol !== "http:" || !LOOPBACK.test(url.hostname)) {
-    throw new Error("小屋世界桥地址必须是本机回环地址，已拒绝。");
-  }
-  const port = url.port ? Number(url.port) : 80;
-  const expect = await expectedPort(dataDir);
-  if (port !== expect) {
-    throw new Error(`小屋世界桥端口与配置不一致（期望 ${expect}，bridge.json 为 ${port}），已拒绝；请重启桥或检查 bridge.config.json。`);
-  }
-  return url;
+function baseUrl(opts) {
+  return `http://127.0.0.1:${safePort(opts?.port)}`;
 }
-async function readBridge(dataDir) {
-  if (!dataDir) throw new Error("未配置小屋世界数据目录（cabinWorldDataDir）。");
-  let cfg;
-  try {
-    cfg = JSON.parse(await readFile(join(dataDir, "bridge.json"), "utf8"));
-  } catch {
-    throw new Error("读不到小屋世界的 bridge.json。请先双击 CabinWorld 文件夹里的 start.cmd 启动游戏和桥。");
-  }
-  const url = await safeBridgeUrl(dataDir, cfg.url);
-  if (!cfg.token) throw new Error("小屋世界 bridge.json 里没有 token，请重启桥。");
-  return { url, token: String(cfg.token) };
+function room3dDirs(opts) {
+  const env = typeof process !== "undefined" && process.env?.DSH_ROOM3D_DIR ? process.env.DSH_ROOM3D_DIR : "";
+  const candidates = [
+    normalizeDir(opts?.dataDir, ""),
+    normalizeDir(env, ""),
+    normalizeDir("", DEFAULT_DIR)
+  ].filter(Boolean);
+  return [...new Set(candidates)];
 }
-async function callCabin({ dataDir, fallbackDir }, name, args = {}, timeoutMs = MAX_TIMEOUT_MS) {
-  const dir = normalizeDataDir(dataDir, fallbackDir);
-  const { url, token } = await readBridge(dir);
-  url.pathname = "/v1/tool";
-  const controller = new AbortController();
-  const limit = Math.min(Math.max(1e3, Number(timeoutMs) || MAX_TIMEOUT_MS), MAX_TIMEOUT_MS);
-  const timer = setTimeout(() => controller.abort(), limit);
-  let res;
+function room3dInstalled(opts) {
+  return room3dDirs(opts).some((dir) => existsSync(`${dir}/src/bridge.js`) && existsSync(`${dir}/config.json`));
+}
+function clean(value, depth = 0) {
+  if (value === null || value === void 0) return null;
+  if (typeof value === "string") return value.length > MAX_TEXT ? value.slice(0, MAX_TEXT) + "…" : value;
+  if (typeof value === "number" || typeof value === "boolean") return value;
+  if (Array.isArray(value)) return value.slice(0, 12).map((v) => clean(v, depth + 1));
+  if (depth > 4) return "[…]";
+  const out = {};
+  for (const [k, v] of Object.entries(value)) {
+    if (SENSITIVE_KEY.test(k)) continue;
+    out[k] = clean(v, depth + 1);
+  }
+  return out;
+}
+function format(data) {
+  const cleaned = clean(data);
+  const text = JSON.stringify(cleaned, null, 2);
+  const lines = text.split("\n");
+  return lines.length > MAX_LINES ? lines.slice(0, MAX_LINES).join("\n") + "\n…(已截断)" : text;
+}
+async function request(path, method, body, opts) {
+  const allowed = /* @__PURE__ */ new Set([
+    "/api/room/state",
+    "/api/home/state",
+    "/api/garden/state",
+    "/api/room/inspect",
+    "/api/room/act",
+    "/api/home/act",
+    "/api/garden/act",
+    "/api/garden/control"
+  ]);
+  if (!allowed.has(path)) throw new Error(`3D 小屋工具路径不在白名单：${path}`);
+  const url = baseUrl(opts) + path;
+  let parsed;
   try {
-    res = await fetch(url, {
-      method: "POST",
-      headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
-      body: JSON.stringify({ name, arguments: args ?? {} }),
-      signal: controller.signal,
-      redirect: "error"
-      // 不跟随重定向，避免 token 被转发到别处
+    parsed = new URL(url);
+  } catch {
+    throw new Error("3D 小屋地址无效。");
+  }
+  if (parsed.protocol !== "http:" || !LOOPBACK.test(parsed.hostname)) {
+    throw new Error("3D 小屋只接受本机回环地址，已拒绝。");
+  }
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), MAX_TIMEOUT_MS);
+  try {
+    const resp = await fetch(url, {
+      method,
+      headers: body === void 0 ? {} : { "content-type": "application/json" },
+      body: body === void 0 ? void 0 : JSON.stringify(body),
+      signal: ctrl.signal
     });
+    const text = await resp.text();
+    let data;
+    try {
+      data = JSON.parse(text);
+    } catch {
+      data = { ok: resp.ok, raw: text.slice(0, 500) };
+    }
+    if (!resp.ok && (data && typeof data === "object" && ("message" in data || "error" in data))) return data;
+    if (!resp.ok) throw new Error(data?.message || data?.error || `HTTP ${resp.status}`);
+    return data;
   } catch (e) {
-    if (e?.name === "AbortError") throw new Error("小屋世界桥响应超时（可能游戏正忙），稍后再试。");
-    throw new Error("连不上小屋世界桥，请确认 CabinWorld 的 start.cmd 仍在运行。");
+    if (e?.name === "AbortError") throw new Error("3D 小屋服务响应超时（15 秒），请确认它已启动。");
+    if (e instanceof TypeError) throw new Error("连不上 3D 小屋服务：请先在 D:/FeiyuRoom3D 运行 npm start。");
+    throw e;
   } finally {
     clearTimeout(timer);
   }
-  const text = await res.text();
-  let data;
-  try {
-    data = text ? JSON.parse(text) : {};
-  } catch {
-    data = { ok: false, error: `桥返回了非 JSON 内容（HTTP ${res.status}）` };
-  }
-  if (!res.ok && data?.ok !== false) throw new Error(`小屋世界桥 HTTP ${res.status}`);
-  return data;
 }
-async function cabinHealth({ dataDir, fallbackDir }, timeoutMs = 3e3) {
-  const dir = normalizeDataDir(dataDir, fallbackDir);
-  if (!dir) return { online: false, reason: "未配置数据目录" };
-  let cfg;
-  try {
-    cfg = JSON.parse(await readFile(join(dir, "bridge.json"), "utf8"));
-  } catch {
-    return { online: false, reason: "bridge.json 不存在（桥未启动）" };
-  }
-  let url;
-  try {
-    url = await safeBridgeUrl(dir, cfg.url);
-  } catch (e) {
-    return { online: false, reason: e?.message || "桥地址无效" };
-  }
-  url.pathname = "/v1/health";
-  try {
-    const res = await fetch(url, { signal: AbortSignal.timeout(Math.max(500, Math.min(timeoutMs, 5e3))) });
-    const j = await res.json().catch(() => ({}));
-    return { online: res.ok, ...j };
-  } catch {
-    return { online: false, reason: "桥无响应" };
-  }
+async function room3dState(opts) {
+  const [room, home, garden] = await Promise.all([
+    request("/api/room/state", "GET", void 0, opts),
+    request("/api/home/state", "GET", void 0, opts),
+    request("/api/garden/state", "GET", void 0, opts)
+  ]);
+  return { room, home, garden };
 }
-function clip(value, max = MAX_TEXT) {
-  const s = String(value).replace(/[\r\n]+/g, " ").trim();
-  return s.length > max ? `${s.slice(0, max)}…` : s;
+async function home3dAct(opts, body) {
+  return request("/api/home/act", "POST", body, opts);
 }
-function cabinResultText(name, data) {
-  if (data?.error) return `【小屋世界·${name}】失败：${clip(data.error)}${data.hint ? `
-${clip(data.hint)}` : ""}`;
-  const lines = [`【小屋世界·${name}】`];
-  const walk = (obj, depth = 0) => {
-    if (depth > 3 || obj == null || lines.length >= MAX_LINES) return;
-    if (Array.isArray(obj)) {
-      if (obj.length && typeof obj[0] !== "object") lines.push(clip(obj.slice(0, 30).map(clip).join("、")));
-      else obj.slice(0, 20).forEach((o, i) => {
-        if (lines.length >= MAX_LINES) return;
-        lines.push(`  [${i}]`);
-        walk(o, depth + 1);
-      });
-      return;
-    }
-    if (typeof obj !== "object") return;
-    for (const [k, v] of Object.entries(obj)) {
-      if (lines.length >= MAX_LINES) break;
-      if (k === "ok" || k === "taskId" || SENSITIVE_KEY.test(k)) continue;
-      if (v == null) continue;
-      if (typeof v === "object") {
-        lines.push(`  ${k}:`);
-        walk(v, depth + 1);
-      } else lines.push(`  ${k}: ${clip(v)}`);
-    }
-  };
-  walk(data);
-  if (data?.taskId) lines.push(`  taskId: ${clip(data.taskId)}（用 cabin_task 查回执，done 才算完成）`);
-  if (lines.length === 1) lines.push("  （无更多内容）");
-  return lines.join("\n");
+async function garden3dAct(opts, body) {
+  return request("/api/garden/act", "POST", body, opts);
+}
+async function garden3dControl(opts, body) {
+  return request("/api/garden/control", "POST", body, opts);
+}
+function room3dText(data) {
+  return format(data);
+}
+async function room3dHealth(opts) {
+  const url = baseUrl(opts) + "/room/";
+  try {
+    const resp = await fetch(url, { method: "GET", signal: AbortSignal.timeout(3e3) });
+    return { online: resp.ok, status: resp.status };
+  } catch {
+    return { online: false, status: 0 };
+  }
 }
 
 // src/index.ts
 import * as dshSession from "@deepseek-ai/dsh-session";
 import { z } from "zod";
-import { existsSync, readFileSync, readdirSync, statSync, openSync, closeSync } from "node:fs";
-import { readFile as readFile3, writeFile, mkdir } from "node:fs/promises";
+import { existsSync as existsSync2, readFileSync, readdirSync, statSync, openSync, closeSync } from "node:fs";
+import { readFile as readFile2, writeFile, mkdir } from "node:fs/promises";
 import { homedir as homedir2 } from "node:os";
 import { spawn } from "node:child_process";
-import { dirname as dirname2, join as join3, extname, basename, resolve as resolvePath } from "node:path";
+import { dirname, join as join2, extname, basename, resolve as resolvePath } from "node:path";
 
 // src/home.ts
 var HOME_VERSION = 2;
@@ -953,10 +939,10 @@ function appendStream(stream, entry, max = 1200) {
   return { stream: list.slice(-max), archived: overflow };
 }
 function bigrams(text) {
-  const clean = String(text).toLowerCase().replace(/[\s\p{P}]/gu, "");
+  const clean2 = String(text).toLowerCase().replace(/[\s\p{P}]/gu, "");
   const grams = [];
-  for (let i = 0; i < clean.length - 1; i++) grams.push(clean.slice(i, i + 2));
-  if (clean.length === 1) grams.push(clean);
+  for (let i = 0; i < clean2.length - 1; i++) grams.push(clean2.slice(i, i + 2));
+  if (clean2.length === 1) grams.push(clean2);
   return grams;
 }
 function terms(text) {
@@ -1083,9 +1069,9 @@ function layoutStarmap(map, width = 640, height = 360) {
 }
 
 // src/pet-bridge.ts
-import { readFile as readFile2 } from "node:fs/promises";
+import { readFile } from "node:fs/promises";
 import { homedir } from "node:os";
-import { isAbsolute as isAbsolute2, join as join2 } from "node:path";
+import { isAbsolute as isAbsolute2, join } from "node:path";
 var DEFAULT_DIRS = ["大肥鱼插件", "deepfish-desktop-pet", "DeepFish-desktop-pet", "WHALEL2D"];
 var MAX_PET_RESPONSE_BYTES = 2 * 1024 * 1024;
 function userHome() {
@@ -1094,7 +1080,7 @@ function userHome() {
 function resolveApiPath(configured, extraDirs = []) {
   if (typeof configured === "string" && configured.trim()) {
     const p = configured.trim();
-    return isAbsolute2(p) || /^[A-Za-z]:[\\/]/.test(p) ? p : join2(userHome(), p);
+    return isAbsolute2(p) || /^[A-Za-z]:[\\/]/.test(p) ? p : join(userHome(), p);
   }
   const roots = [userHome()];
   if (typeof process !== "undefined" && process.env?.DSH_HOME && process.env.DSH_HOME !== userHome()) {
@@ -1103,12 +1089,12 @@ function resolveApiPath(configured, extraDirs = []) {
   const out = [];
   const isAbs = (p) => isAbsolute2(p) || /^[A-Za-z]:[\\/]/.test(p);
   for (const dir of extraDirs) {
-    if (isAbs(dir)) out.push(join2(dir, "api.json"));
+    if (isAbs(dir)) out.push(join(dir, "api.json"));
   }
   const relativeDirs = [...extraDirs.filter((d) => !isAbs(d)), ...DEFAULT_DIRS];
   for (const root of roots) {
-    for (const dir of relativeDirs) out.push(join2(root, dir, "api.json"));
-    out.push(join2(root, "api.json"));
+    for (const dir of relativeDirs) out.push(join(root, dir, "api.json"));
+    out.push(join(root, "api.json"));
   }
   return out;
 }
@@ -1129,7 +1115,7 @@ async function readPetApi(configured, extraDirs = []) {
   const list = Array.isArray(candidates) ? candidates : [candidates];
   for (const path of list) {
     try {
-      const api = JSON.parse(await readFile2(path, "utf8"));
+      const api = JSON.parse(await readFile(path, "utf8"));
       const url = typeof api.url === "string" ? api.url.trim().replace(/\/+$/, "") : "";
       const token = typeof api.token === "string" ? api.token.trim() : "";
       if (url && token && isLoopbackUrl(url)) return { baseUrl: url, token, path, version: api.version || 1 };
@@ -1191,7 +1177,7 @@ var sharedPresence = null;
 var PLUGIN_DIR = (() => {
   try {
     const p = decodeURIComponent(new URL(import.meta.url).pathname).replace(/^\/([A-Za-z]:)/, "$1");
-    return dirname2(p);
+    return dirname(p);
   } catch {
     return ".";
   }
@@ -1202,19 +1188,18 @@ function petInstallDirs(preferred = "") {
   const candidates = [
     ...preferred ? [preferred] : [],
     ...typeof process !== "undefined" && process.env?.DSH_FISH_PET_DIR ? [process.env.DSH_FISH_PET_DIR] : [],
-    // 首选：codearts 版本插件自带的 pet/（WebVIEW2 宿主随插件一起走）
-    join3(PLUGIN_DIR, "pet"),
-    // 用户把桌宠整体搬到 DSH项目 根下的独立稳定目录
-    join3(PLUGIN_DIR, "..", "..", "..", "pet"),
-    join3(PLUGIN_DIR, "..", "pet"),
+    // 用户把桌宠整体搬到 DSH项目 根下的独立稳定目录（当前实际安装位置）
+    join2(PLUGIN_DIR, "..", "..", "..", "pet"),
+    join2(PLUGIN_DIR, "..", "pet"),
+    join2(PLUGIN_DIR, "pet"),
     // 旧位置兼容：以前装在 deepseek personality 插件目录里
-    join3(PLUGIN_DIR, "..", "..", "..", "deepseek personality", "dsh-companion-fishgirl", "pet")
+    join2(PLUGIN_DIR, "..", "..", "..", "deepseek personality", "dsh-companion-fishgirl", "pet")
   ];
   const out = [];
   for (const p of candidates) {
     try {
       const abs = resolvePath(p);
-      if (!existsSync(join3(abs, "main.js")) || !existsSync(join3(abs, "package.json"))) continue;
+      if (!existsSync2(join2(abs, "main.js")) || !existsSync2(join2(abs, "package.json"))) continue;
       if (!out.includes(abs)) out.push(abs);
     } catch {
     }
@@ -1228,28 +1213,21 @@ function resolvePetDir(preferred = "") {
     if (explicit && dirs.includes(explicit)) return explicit;
   } catch {
   }
-  return dirs.find((d) => !!petWebView2Host(d) && existsSync(join3(d, "config.json"))) || dirs.find((d) => !!petWebView2Host(d)) || dirs.find((d) => !!petElectronExe(d) && existsSync(join3(d, "config.json"))) || dirs.find((d) => !!petElectronExe(d)) || dirs[0] || "";
+  return dirs.find((d) => !!petElectronExe(d) && existsSync2(join2(d, "config.json"))) || dirs.find((d) => !!petElectronExe(d)) || dirs[0] || "";
 }
 function petDirLabel(dir) {
   return dir ? String(dir).replace(/[\\/]+$/, "").split(/[\\/]/).slice(-3).join("/") : "";
 }
 function petElectronExe(petDir) {
   if (!petDir) return "";
-  const exe = join3(
+  const exe = join2(
     petDir,
     "node_modules",
     "electron",
     "dist",
     process.platform === "win32" ? "electron.exe" : "electron"
   );
-  return existsSync(exe) ? exe : "";
-}
-function petWebView2Host(petDir) {
-  if (!petDir || process.platform !== "win32") return "";
-  const host = join3(petDir, "webview2", "host.py");
-  const loader = join3(petDir, "webview2", "WebView2Loader.dll");
-  const server = join3(petDir, "server-only.mjs");
-  return existsSync(host) && existsSync(loader) && existsSync(server) ? host : "";
+  return existsSync2(exe) ? exe : "";
 }
 function cleanElectronEnv() {
   const env = { ...process.env };
@@ -1271,7 +1249,7 @@ async function petHealth(api) {
 async function findHealthyPetApi(explicit, dirs) {
   const paths = [
     ...explicit ? [explicit] : [],
-    ...dirs.map((d) => join3(d, "api.json")),
+    ...dirs.map((d) => join2(d, "api.json")),
     ...resolveApiPath("", [])
   ];
   for (const p of paths) {
@@ -1288,16 +1266,16 @@ function readLogTail(path, max = 1200) {
     return "";
   }
 }
-var SETTINGS_DIR = join3(
+var SETTINGS_DIR = join2(
   typeof process !== "undefined" && process.env?.DSH_HOME ? process.env.DSH_HOME : homedir2(),
   ".dsh",
   "companion-fishgirl"
 );
-var SETTINGS_FILE = join3(SETTINGS_DIR, "settings.json");
+var SETTINGS_FILE = join2(SETTINGS_DIR, "settings.json");
 var SETTINGS_ENDPOINT = "/api/companion-fishgirl/settings";
-function isSameOrigin(request) {
+function isSameOrigin(request2) {
   try {
-    const headers = request?.headers ?? {};
+    const headers = request2?.headers ?? {};
     const origin = typeof headers.origin === "string" ? headers.origin : "";
     if (!origin) return true;
     const host = typeof headers.host === "string" ? headers.host : "";
@@ -1315,8 +1293,8 @@ function isSameOrigin(request) {
 }
 async function readSettingsFile() {
   try {
-    if (!existsSync(SETTINGS_FILE)) return null;
-    const parsed = JSON.parse(await readFile3(SETTINGS_FILE, "utf8"));
+    if (!existsSync2(SETTINGS_FILE)) return null;
+    const parsed = JSON.parse(await readFile2(SETTINGS_FILE, "utf8"));
     return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : null;
   } catch {
     return null;
@@ -1324,7 +1302,7 @@ async function readSettingsFile() {
 }
 async function writeSettingsFile(value, ctx) {
   try {
-    await mkdir(dirname2(SETTINGS_FILE), { recursive: true });
+    await mkdir(dirname(SETTINGS_FILE), { recursive: true });
     await writeFile(SETTINGS_FILE, JSON.stringify(value, null, 2), "utf8");
   } catch (err) {
     ctx?.logger?.warn?.(`companion: settings write failed: ${String(err)}`);
@@ -1646,8 +1624,8 @@ function applySetback(state, signal, cfg) {
 }
 function sanitizeText(raw, maxChars) {
   if (typeof raw !== "string") return null;
-  const clean = raw.replace(/[\u0000-\u001f\u007f]/g, " ").replace(/\s+/g, " ").trim();
-  return clean.length === 0 ? null : clean.slice(0, maxChars);
+  const clean2 = raw.replace(/[\u0000-\u001f\u007f]/g, " ").replace(/\s+/g, " ").trim();
+  return clean2.length === 0 ? null : clean2.slice(0, maxChars);
 }
 var DEFAULT_PERSONA = { personality: "gentle", tone: "soft", preferences: [], avatarName: "大肥鱼" };
 var PERSONA_CUT_SECTIONS = /* @__PURE__ */ new Set([
@@ -1759,10 +1737,9 @@ var Companion = class extends Service {
       // 会话结束时让模型自己整理记忆（followup 一条内部任务消息）。
       curateOnClose: config.curateOnClose ?? true,
       homeEnabled: config.homeEnabled ?? true,
-      // v0.24.0 小窝改为 GitHub 原版 cabin-world（内置桥客户端）：默认开，
-      // 数据目录指向解压后的 CabinWorld\data；桥未启动时工具会友好报错。
-      cabinWorldEnabled: config.cabinWorldEnabled ?? true,
-      cabinWorldDataDir: typeof config.cabinWorldDataDir === "string" ? config.cabinWorldDataDir : "",
+      // v0.27.0 小屋只保留 3D 海底小屋（feiyu-room-template）。Godot 像素引擎已移除。
+      room3dDir: typeof config.room3dDir === "string" ? config.room3dDir : "",
+      room3dPort: Number.isInteger(config.room3dPort) ? config.room3dPort : 13100,
       // v0.20.0 Live2D 桌宠桥接：默认关（桌面端需用户自行安装桌宠/放模型）。
       petBridgeEnabled: config.petBridgeEnabled ?? false,
       petApiPath: typeof config.petApiPath === "string" ? config.petApiPath : ""
@@ -1979,24 +1956,24 @@ var Companion = class extends Service {
   async setPreference(userId, value, add) {
     const key = this.resolveUserId(userId);
     const state = await this.read(key);
-    const clean = sanitizeText(value, 64);
-    if (clean === null) return state;
+    const clean2 = sanitizeText(value, 64);
+    if (clean2 === null) return state;
     const set = new Set(state.preferences);
     if (add) {
       const NEG_RE = /(不再|戒了|戒掉|戒|不喜欢|不喝|不吃|不玩|不去|不|别|讨厌)/;
-      if (NEG_RE.test(clean)) {
-        const core = clean.replace(/^(我)?(最近|现在|今天|从今天起)?/, "").replace(NEG_RE, "").replace(/[了啦呀哦嘛]，?.*$/, "").trim();
-        if (core && core !== clean) {
+      if (NEG_RE.test(clean2)) {
+        const core = clean2.replace(/^(我)?(最近|现在|今天|从今天起)?/, "").replace(NEG_RE, "").replace(/[了啦呀哦嘛]，?.*$/, "").trim();
+        if (core && core !== clean2) {
           for (const p of [...set]) {
-            if (p === clean) continue;
+            if (p === clean2) continue;
             const pCore = p.replace(/^(喜欢|爱吃|爱|讨厌)/, "").replace(/[了啦呀哦嘛]$/, "");
             if (p.includes(core) || pCore && (core.includes(pCore) || pCore.includes(core))) set.delete(p);
           }
         }
       }
-      if (set.size >= this.cfg.maxPreferences && !set.has(clean)) return state;
-      set.add(clean);
-    } else set.delete(clean);
+      if (set.size >= this.cfg.maxPreferences && !set.has(clean2)) return state;
+      set.add(clean2);
+    } else set.delete(clean2);
     const next = { ...state, preferences: [...set].slice(0, this.cfg.maxPreferences) };
     await this.domain.table("bonds").put(key, next);
     this.notify();
@@ -2140,17 +2117,17 @@ var Companion = class extends Service {
     const state = await this.read(key);
     const summary = sanitizeText(event.summary, 140);
     if (summary === null) return state;
-    const clean = {
+    const clean2 = {
       id: sanitizeText(event.id, 64) ?? String(Date.now()),
       summary,
       at: Number.isFinite(event.at) ? event.at : Date.now(),
       sentiment: Math.max(-1, Math.min(1, event.sentiment ?? 0))
     };
-    const list = add ? [...state.importantEvents.filter((e) => e.id !== clean.id), clean] : state.importantEvents.filter((e) => e.id !== clean.id);
-    const now = clean.at;
+    const list = add ? [...state.importantEvents.filter((e) => e.id !== clean2.id), clean2] : state.importantEvents.filter((e) => e.id !== clean2.id);
+    const now = clean2.at;
     const kind = event.kind === "promise" ? "promise" : "milestone";
     const activities = add ? mergeActivity(state.activities ?? [], {
-      id: `mem-${clean.id}`,
+      id: `mem-${clean2.id}`,
       kind,
       summary: summary.slice(0, 80),
       at: now,
@@ -2278,21 +2255,7 @@ ${timeline}`,
       '【记忆使用规则】「近期经历」是你在**所有窗口**的真实经历（含用户此刻没打开的），可自然提起。「长期话题」是反复聊出结论的事——新窗口提到相关话题就主动接上，让他知道你一直记着。带「大概记得 / 只记得有这回事 / 大致印象」的用模糊口吻（"记不太清，好像是…"），别装作历历在目。用户问「送过什么 / 上次聊了什么 / 今天/今晚吃了什么」必须依据记录答，绝不用亲密度反推。**字面对不上不等于没发生**：系统提示里已有相关话题（如「吃饭·食堂」）却查不到具体那顿，就说「我大概记得你提过食堂，具体吃了啥记不清了」，不要说「没留下 / 没找到」——那会显得像失忆。要更细的用 companion_recall 查（支持「食堂」这类概念词）。',
       "【记忆写入规则】用户说称呼/喜好/忌讳/约定或「记住…」时，调 companion_remember 记 ≤140 字摘要（别只嘴上答应，已有的别重复）；话题聊了几轮有了看法/决定/进展时，调 companion_topic 写 ≤200 字话题档案（话题名+结论），新窗口才接得上。"
     ];
-    const homeLine = this.cfg.homeEnabled === false ? "" : (() => {
-      if (this.cfg.cabinWorldEnabled !== false) {
-        return "【小窝·原版小屋世界】你住在像素小屋世界里，有真实的身体、零花钱、背包、日记，屋后还有一块菜园。她的日常生活由你自己用 cabin_* 工具安排：先 cabin_status 看状态、cabin_look 看身边，再用 cabin_process / cabin_go / cabin_use / cabin_buy / cabin_restaurant 让她去做事；照料菜园用 cabin_farm（status 看菜畦和作物、till 翻土、plant 播种、water 浇水、fertilize 施肥、harvest 收获、sell 卖菜），菜园离线也会继续长，有自己的小金库和收成篮。返回 running 用 cabin_task 查回执，done 才算做完。问起「你在干嘛」要先查工具、按真实状态答，别凭空编。";
-      }
-      try {
-        const h = tickHome(normalizeHome(state.home), now);
-        if (h.sleeping) return "【小窝·此刻】这个点她已经睡下了（说梦话/被叫醒才回应，别当她一直醒着）。";
-        if (!h.activity) return "";
-        const a = h.activity;
-        const extra = a.note || a.line;
-        return `【小窝·此刻】她${a.verb}${extra && extra !== a.verb ? `（${extra}）` : ""}。问起「你在干嘛」就照这个说，别编别处的事。`;
-      } catch {
-        return "";
-      }
-    })();
+    const homeLine = this.cfg.homeEnabled === false ? "" : "【小窝·3D 海底小屋】你住在一间 3D 小屋里，有真实的房间与屋后菜园。用 room3d_* 工具照看自己与生活：先 room3d_status 看当前房间、天气、时间和菜园概况，再用 room3d_act 走动、摸头、喂食、玩耍、留言、睡觉起床或开关灯；菜园用 room3d_garden（status 看 8 块田/金币/种子/仓库、till 松土、plant 播种、water 浇水、fertilize 施肥、harvest 收获、sell 卖菜、buySeed 买种子、buyCompost 买堆肥），也可以用 room3d_care(type=auto,enabled=true/false) 让她自主照料、或 visit/careNow 请她过去。作物离线照样长，时间在服务端推进。侧栏里的像素房间和院子是同一只鱼的另一面，用 companion_home 照看。问起「你在干嘛」要先查工具、按真实状态答，别凭空编。";
     if (promptModulesEnabled === false) {
       return [
         `[陪伴关系同步 · ${p.avatarName}]`,
@@ -2726,8 +2689,8 @@ function topicRelevance(topic, context, now) {
   let score = topicRetention(topic, now) * 2;
   for (const tag of tags) if (tag && hay.includes(tag)) score += 1.5;
   const grams = /* @__PURE__ */ new Set();
-  const clean = text.replace(/[^\u4e00-\u9fa5a-zA-Z0-9]/g, "");
-  for (let i = 0; i + 2 <= clean.length; i += 1) grams.add(clean.slice(i, i + 2));
+  const clean2 = text.replace(/[^\u4e00-\u9fa5a-zA-Z0-9]/g, "");
+  for (let i = 0; i + 2 <= clean2.length; i += 1) grams.add(clean2.slice(i, i + 2));
   const nameAndKw = `${topic.name ?? ""} ${(topic.keywords ?? []).join(" ")}`;
   for (const g of grams) if (nameAndKw.includes(g)) score += 0.12;
   return Math.min(10, score);
@@ -2761,12 +2724,12 @@ function timeLabel(at, now) {
   return `${pad2(d.getMonth() + 1)}-${pad2(d.getDate())} ${hm}`;
 }
 function excerpt(text, max = 120) {
-  const clean = sanitizeText(text, max) ?? "";
-  return clean.length > 0 ? clean : "";
+  const clean2 = sanitizeText(text, max) ?? "";
+  return clean2.length > 0 ? clean2 : "";
 }
 function giftLabel(text) {
-  const clean = sanitizeText(text, 60) ?? "";
-  const stripped = clean.replace(/^(我)?(今天|昨天|刚才|刚刚)?(要|想|准备)?送(给)?你/, "").replace(/^[一两几]?[个束杯盒只条朵张份把]/, "").replace(/^(的)?(小?礼物)[，,、]?/, "").trim();
+  const clean2 = sanitizeText(text, 60) ?? "";
+  const stripped = clean2.replace(/^(我)?(今天|昨天|刚才|刚刚)?(要|想|准备)?送(给)?你/, "").replace(/^[一两几]?[个束杯盒只条朵张份把]/, "").replace(/^(的)?(小?礼物)[，,、]?/, "").trim();
   return stripped.length > 0 ? stripped : "一份小礼物";
 }
 function isQuestionOnly(text) {
@@ -2957,30 +2920,14 @@ function apply(ctx, config = {}) {
     memoryMode: normalizeMode(config.memoryMode),
     homeEnabled: config.homeEnabled ?? true,
     curateOnClose: config.curateOnClose ?? true,
-    // v0.24.0 原版 cabin-world 内置桥客户端
-    cabinWorldEnabled: config.cabinWorldEnabled !== false,
-    cabinWorldDataDir: typeof config.cabinWorldDataDir === "string" ? config.cabinWorldDataDir : "",
+    // v0.27.0 Godot 像素小屋已移除；3D 小屋是唯一引擎
+    room3dDir: typeof config.room3dDir === "string" ? config.room3dDir : "",
+    room3dPort: Number.isInteger(config.room3dPort) ? config.room3dPort : 13100,
     // v0.20.0 Live2D 桌宠桥接
     petBridgeEnabled: config.petBridgeEnabled === true,
     petApiPath: typeof config.petApiPath === "string" ? config.petApiPath : "",
     // v0.24.2：桌宠安装目录（含 main.js / Electron 的那一个 pet/）。留空自动探测。
     petDir: typeof config.petDir === "string" ? config.petDir : ""
-  };
-  const cabinFallbackDir = () => {
-    const candidates = [
-      runtimeOpts.cabinWorldDataDir,
-      ...process.env.CABINWORLD_DATA_DIR ? [process.env.CABINWORLD_DATA_DIR] : [],
-      join3(PLUGIN_DIR, "..", "CabinWorld", "data"),
-      "D:/CabinWorld/data",
-      "C:/CabinWorld/data"
-    ].filter((p) => typeof p === "string" && p.trim());
-    for (const p of candidates) {
-      try {
-        if (existsSync(join3(p, "bridge.json"))) return p;
-      } catch {
-      }
-    }
-    return "D:/CabinWorld/data";
   };
   const syncMemoryMode = () => {
     companion.cfg.memoryMode = runtimeOpts.memoryMode;
@@ -3356,8 +3303,8 @@ function apply(ctx, config = {}) {
     memoryMode: runtimeOpts.memoryMode,
     homeEnabled: runtimeOpts.homeEnabled,
     curateOnClose: runtimeOpts.curateOnClose,
-    cabinWorldEnabled: runtimeOpts.cabinWorldEnabled,
-    cabinWorldDataDir: runtimeOpts.cabinWorldDataDir,
+    room3dDir: runtimeOpts.room3dDir,
+    room3dPort: runtimeOpts.room3dPort,
     petBridgeEnabled: runtimeOpts.petBridgeEnabled,
     petApiPath: runtimeOpts.petApiPath,
     petDir: runtimeOpts.petDir
@@ -3373,13 +3320,13 @@ function apply(ctx, config = {}) {
     }
     if (typeof next.homeEnabled === "boolean") runtimeOpts.homeEnabled = next.homeEnabled;
     if (typeof next.curateOnClose === "boolean") runtimeOpts.curateOnClose = next.curateOnClose;
-    if (typeof next.cabinWorldEnabled === "boolean") {
-      runtimeOpts.cabinWorldEnabled = next.cabinWorldEnabled;
-      companion.cfg.cabinWorldEnabled = next.cabinWorldEnabled;
+    if (typeof next.room3dDir === "string") {
+      runtimeOpts.room3dDir = next.room3dDir;
+      companion.cfg.room3dDir = next.room3dDir;
     }
-    if (typeof next.cabinWorldDataDir === "string") {
-      runtimeOpts.cabinWorldDataDir = next.cabinWorldDataDir;
-      companion.cfg.cabinWorldDataDir = next.cabinWorldDataDir;
+    if (Number.isInteger(next.room3dPort) && next.room3dPort > 1024 && next.room3dPort < 65536) {
+      runtimeOpts.room3dPort = next.room3dPort;
+      companion.cfg.room3dPort = next.room3dPort;
     }
     if (typeof next.petBridgeEnabled === "boolean") runtimeOpts.petBridgeEnabled = next.petBridgeEnabled;
     if (typeof next.petApiPath === "string") runtimeOpts.petApiPath = next.petApiPath;
@@ -3400,15 +3347,15 @@ function apply(ctx, config = {}) {
   };
   if (rawServer()) {
     ctx.effect(() => {
-      const readJson = (request) => new Promise((resolve2) => {
+      const readJson = (request2) => new Promise((resolve2) => {
         const chunks = [];
         let bytes = 0;
-        request.on("data", (chunk) => {
+        request2.on("data", (chunk) => {
           const buf = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
           bytes += buf.length;
           if (bytes <= 64 * 1024) chunks.push(buf);
         });
-        request.on("end", () => {
+        request2.on("end", () => {
           try {
             const parsed = JSON.parse(Buffer.concat(chunks).toString("utf8"));
             resolve2(parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : null);
@@ -3416,7 +3363,7 @@ function apply(ctx, config = {}) {
             resolve2(null);
           }
         });
-        request.on("error", () => resolve2(null));
+        request2.on("error", () => resolve2(null));
       });
       const send = (res, code, value) => {
         res.writeHead(code, { "content-type": "application/json; charset=utf-8", "cache-control": "no-store" });
@@ -3425,22 +3372,22 @@ function apply(ctx, config = {}) {
       const dispose = ctx.webServer.register({
         kind: "exact",
         path: SETTINGS_ENDPOINT,
-        handler: async (request, response) => {
-          if (!isSameOrigin(request)) {
+        handler: async (request2, response) => {
+          if (!isSameOrigin(request2)) {
             send(response, 403, { ok: false, error: "跨站请求已拒绝" });
             return;
           }
-          if (request.method === "GET" || request.method === "HEAD") {
+          if (request2.method === "GET" || request2.method === "HEAD") {
             send(response, 200, { ok: true, ...currentSettings() });
             return;
           }
-          if (request.method === "POST") {
-            const body = await readJson(request);
+          if (request2.method === "POST") {
+            const body = await readJson(request2);
             if (!body) {
               send(response, 400, { ok: false, error: "请求体无效" });
               return;
             }
-            const known = ["promptModulesEnabled", "personaEnabled", "globalCompanionMode", "relaxedMode", "homeEnabled", "curateOnClose", "petBridgeEnabled", "cabinWorldEnabled"].some((k) => typeof body[k] === "boolean") || typeof body.memoryMode === "string" && ["summary", "stream", "tiered"].includes(body.memoryMode) || typeof body.petApiPath === "string" || typeof body.petDir === "string" || typeof body.cabinWorldDataDir === "string";
+            const known = ["promptModulesEnabled", "personaEnabled", "globalCompanionMode", "relaxedMode", "homeEnabled", "curateOnClose", "petBridgeEnabled"].some((k) => typeof body[k] === "boolean") || typeof body.memoryMode === "string" && ["summary", "stream", "tiered"].includes(body.memoryMode) || typeof body.petApiPath === "string" || typeof body.petDir === "string" || typeof body.room3dDir === "string" || typeof body.room3dPort === "number";
             if (!known) {
               send(response, 400, { ok: false, error: "缺少合法的开关值" });
               return;
@@ -3475,16 +3422,20 @@ function apply(ctx, config = {}) {
                 return;
               }
             }
-            if (typeof body.cabinWorldDataDir === "string") {
-              const p = body.cabinWorldDataDir.trim();
+            if (typeof body.room3dDir === "string") {
+              const p = body.room3dDir.trim();
               if (p && !/^[A-Za-z]:[\\/]/.test(p) && !p.startsWith("/")) {
-                send(response, 400, { ok: false, error: "小屋世界数据目录必须是绝对路径" });
+                send(response, 400, { ok: false, error: "3D 小屋目录必须是绝对路径" });
                 return;
               }
               if (p.split(/[\\/]/).includes("..")) {
-                send(response, 400, { ok: false, error: "小屋世界数据目录不能包含 .." });
+                send(response, 400, { ok: false, error: "3D 小屋目录不能包含 .." });
                 return;
               }
+            }
+            if (typeof body.room3dPort === "number" && (!Number.isInteger(body.room3dPort) || body.room3dPort <= 1024 || body.room3dPort >= 65536)) {
+              send(response, 400, { ok: false, error: "3D 小屋端口必须在 1025-65535 之间" });
+              return;
             }
             applySettings(body);
             await writeSettingsFile(currentSettings(), ctx);
@@ -3498,15 +3449,15 @@ function apply(ctx, config = {}) {
       return typeof dispose === "function" ? dispose : void 0;
     }, "companion-fishgirl: settings http route");
     try {
-      const cabinDir = join3(PLUGIN_DIR, "..", "assets", "cabin");
-      const cabinFiles = existsSync(cabinDir) ? readdirSync(cabinDir) : [];
+      const cabinDir = join2(PLUGIN_DIR, "..", "assets", "cabin");
+      const cabinFiles = existsSync2(cabinDir) ? readdirSync(cabinDir) : [];
       for (const file of cabinFiles) {
         if (!/^[A-Za-z0-9._\-一-龥]+\.(png|json)$/.test(file)) continue;
-        const buf = readFileSync(join3(cabinDir, file));
+        const buf = readFileSync(join2(cabinDir, file));
         const disposeAsset = ctx.webServer.register({
           kind: "exact",
           path: "/api/companion-fishgirl/cabin/" + file,
-          handler: (request, response) => {
+          handler: (request2, response) => {
             response.writeHead(200, {
               "content-type": file.endsWith(".png") ? "image/png" : "application/json; charset=utf-8",
               "cache-control": "public, max-age=3600"
@@ -3524,7 +3475,7 @@ function apply(ctx, config = {}) {
     const disposeHome = ctx.webServer.register({
       kind: "exact",
       path: HOME_ENDPOINT,
-      handler: async (request, response) => {
+      handler: async (request2, response) => {
         const readJson = (req) => new Promise((resolve2) => {
           const chunks = [];
           let bytes = 0;
@@ -3547,11 +3498,11 @@ function apply(ctx, config = {}) {
           response.writeHead(code, { "content-type": "application/json; charset=utf-8", "cache-control": "no-store" });
           response.end(JSON.stringify(value));
         };
-        if (!isSameOrigin(request)) {
+        if (!isSameOrigin(request2)) {
           reply(403, { ok: false, error: "跨站请求已拒绝" });
           return;
         }
-        if (request.method === "GET" || request.method === "HEAD") {
+        if (request2.method === "GET" || request2.method === "HEAD") {
           if (!runtimeOpts.homeEnabled) {
             reply(200, { ok: true, enabled: false });
             return;
@@ -3571,12 +3522,12 @@ function apply(ctx, config = {}) {
           }
           return;
         }
-        if (request.method === "POST") {
+        if (request2.method === "POST") {
           if (!runtimeOpts.homeEnabled) {
             reply(403, { ok: false, error: "小窝已停用" });
             return;
           }
-          const body = await readJson(request);
+          const body = await readJson(request2);
           if (!body || typeof body.op !== "string") {
             reply(400, { ok: false, error: "缺少 op" });
             return;
@@ -3601,16 +3552,16 @@ function apply(ctx, config = {}) {
     const disposeMap = ctx.webServer.register({
       kind: "exact",
       path: MAP_ENDPOINT,
-      handler: async (request, response) => {
+      handler: async (request2, response) => {
         const reply = (code, value) => {
           response.writeHead(code, { "content-type": "application/json; charset=utf-8", "cache-control": "no-store" });
           response.end(JSON.stringify(value));
         };
-        if (!isSameOrigin(request)) {
+        if (!isSameOrigin(request2)) {
           reply(403, { ok: false, error: "跨站请求已拒绝" });
           return;
         }
-        if (request.method !== "GET" && request.method !== "HEAD") {
+        if (request2.method !== "GET" && request2.method !== "HEAD") {
           response.writeHead(405, { allow: "GET, HEAD" });
           response.end();
           return;
@@ -3630,23 +3581,23 @@ function apply(ctx, config = {}) {
     const disposePet = ctx.webServer.register({
       kind: "exact",
       path: PET_ENDPOINT,
-      handler: async (request, response) => {
+      handler: async (request2, response) => {
         const reply = (code, value) => {
           response.writeHead(code, { "content-type": "application/json; charset=utf-8", "cache-control": "no-store" });
           response.end(JSON.stringify(value));
         };
-        if (!isSameOrigin(request)) {
+        if (!isSameOrigin(request2)) {
           reply(403, { ok: false, error: "跨站请求已拒绝" });
           return;
         }
         const readParam = (k) => {
           try {
-            return new URL(request.url || PET_ENDPOINT, "http://127.0.0.1").searchParams.get(k);
+            return new URL(request2.url || PET_ENDPOINT, "http://127.0.0.1").searchParams.get(k);
           } catch {
             return null;
           }
         };
-        if ((request.method === "GET" || request.method === "HEAD") && readParam("view") === "presence") {
+        if ((request2.method === "GET" || request2.method === "HEAD") && readParam("view") === "presence") {
           const p = sharedPresence && sharedPresence.expiresAt > Date.now() ? sharedPresence : null;
           reply(200, { ok: true, presence: p });
           return;
@@ -3655,13 +3606,13 @@ function apply(ctx, config = {}) {
           reply(200, { ok: true, enabled: false, connected: false });
           return;
         }
-        let api = await readPetApi(runtimeOpts.petApiPath, [join3(PLUGIN_DIR, "..", "pet"), join3(PLUGIN_DIR, "pet")]);
+        let api = await readPetApi(runtimeOpts.petApiPath, [join2(PLUGIN_DIR, "..", "pet"), join2(PLUGIN_DIR, "pet")]);
         if (!api) {
           reply(200, { ok: true, enabled: true, ...petUnavailableError() });
           return;
         }
         const rich = isRichPet(api);
-        if (request.method === "GET" || request.method === "HEAD") {
+        if (request2.method === "GET" || request2.method === "HEAD") {
           const view = readParam("view") || "state";
           try {
             if (view === "catalog") {
@@ -3691,8 +3642,8 @@ function apply(ctx, config = {}) {
           }
           return;
         }
-        if (request.method === "POST") {
-          const body = await readJson2(request);
+        if (request2.method === "POST") {
+          const body = await readJson2(request2);
           if (!body || typeof body.action !== "string") {
             reply(400, { ok: false, error: "缺少 action" });
             return;
@@ -3769,39 +3720,37 @@ function apply(ctx, config = {}) {
     const disposePetLaunch = ctx.webServer.register({
       kind: "exact",
       path: PET_LAUNCH_ENDPOINT,
-      handler: async (request, response) => {
+      handler: async (request2, response) => {
         const reply = (code, value) => {
           response.writeHead(code, { "content-type": "application/json; charset=utf-8", "cache-control": "no-store" });
           response.end(JSON.stringify(value));
         };
-        if (!isSameOrigin(request)) {
+        if (!isSameOrigin(request2)) {
           reply(403, { ok: false, error: "跨站请求已拒绝" });
           return;
         }
         const dirs = petInstallDirs(runtimeOpts.petDir);
         const dir = resolvePetDir(runtimeOpts.petDir);
-        if (request.method === "GET" || request.method === "HEAD") {
+        if (request2.method === "GET" || request2.method === "HEAD") {
           const api2 = await findHealthyPetApi(runtimeOpts.petApiPath, dirs);
-          const wv2 = !!petWebView2Host(dir);
-          const installed = wv2 || !!petElectronExe(dir);
+          const installed = !!petElectronExe(dir);
           reply(200, {
             ok: true,
             installed,
             running: !!api2,
             installName: petDirLabel(dir),
-            engine: wv2 ? "webview2" : "electron",
             bridgeEnabled: runtimeOpts.petBridgeEnabled,
             pid: lastPetLaunchPid || void 0,
-            message: api2 ? "桌宠已运行" : wv2 ? "系统 WebView2 桌宠已就绪：" + petDirLabel(dir) + "，点击启动" : !installed ? "桌宠宿主尚未安装" : "Electron 已就绪：" + petDirLabel(dir) + "，桌宠未启动"
+            message: api2 ? "桌宠已运行" : !installed ? "Electron 尚未安装" : "Electron 已就绪：" + petDirLabel(dir) + "，桌宠未启动"
           });
           return;
         }
-        if (request.method !== "POST") {
+        if (request2.method !== "POST") {
           response.writeHead(405, { allow: "GET, HEAD, POST" });
           response.end();
           return;
         }
-        const body = await readJson2(request);
+        const body = await readJson2(request2);
         const action = body && body.action;
         if (!["launch", "install"].includes(action)) {
           reply(400, { ok: false, error: "不支持的操作" });
@@ -3812,7 +3761,7 @@ function apply(ctx, config = {}) {
           return;
         }
         if (action === "install") {
-          const log2 = join3(dir, "npm-install.log");
+          const log2 = join2(dir, "npm-install.log");
           let fd2 = -1;
           try {
             fd2 = openSync(log2, "a");
@@ -3847,74 +3796,12 @@ function apply(ctx, config = {}) {
           reply(200, { ok: true, started: false, alreadyRunning: true, running: true, message: "桌宠已经在运行了" });
           return;
         }
-        const wv2Host = petWebView2Host(dir);
-        if (wv2Host) {
-          const log2 = join3(dir, "webview2", "host-launch.log");
-          let fd2 = -1;
-          try {
-            fd2 = openSync(log2, "a");
-          } catch {
-          }
-          let child2;
-          try {
-            child2 = spawn("python", [wv2Host], {
-              cwd: join3(dir, "webview2"),
-              env: cleanElectronEnv(),
-              detached: true,
-              windowsHide: false,
-              stdio: ["ignore", fd2 >= 0 ? fd2 : "ignore", fd2 >= 0 ? fd2 : "ignore"]
-            });
-          } catch (err) {
-            if (fd2 >= 0) {
-              try {
-                closeSync(fd2);
-              } catch {
-              }
-            }
-            reply(502, { ok: false, error: "WebView2 桌宠启动失败：" + String(err && err.message || err) });
-            return;
-          }
-          if (fd2 >= 0) {
-            try {
-              closeSync(fd2);
-            } catch {
-            }
-          }
-          if (!child2 || !child2.pid) {
-            reply(502, { ok: false, error: "WebView2 桌宠进程未能启动（无 pid）。请确认已安装 Python 3。" });
-            return;
-          }
-          lastPetLaunchPid = child2.pid;
-          child2.unref();
-          const launchedAt2 = Date.now();
-          let healthy2 = false;
-          for (let i = 0; i < 50; i++) {
-            await new Promise((done) => setTimeout(done, 500));
-            const fresh = await findHealthyPetApi(runtimeOpts.petApiPath, dirs);
-            if (fresh) {
-              try {
-                if (statSync(fresh.path).mtimeMs >= launchedAt2 - 1500 && await petHealth(fresh)) {
-                  healthy2 = true;
-                  break;
-                }
-              } catch {
-              }
-            }
-          }
-          if (healthy2) {
-            reply(200, { ok: true, started: true, running: true, engine: "webview2", pid: child2.pid, message: "系统 WebView2 桌宠已启动" });
-          } else {
-            const tail = readLogTail(log2);
-            reply(502, { ok: false, engine: "webview2", error: "WebView2 桌宠已拉起但 25 秒内未连上。请检查模型路径与 Python 环境。" + (tail ? "\n" + tail : "") });
-          }
-          return;
-        }
         const exe = petElectronExe(dir);
         if (!exe) {
-          reply(502, { ok: false, needInstall: true, error: "未安装 Electron，且未找到系统 WebView2 宿主。请先点「安装 Electron」。" });
+          reply(502, { ok: false, needInstall: true, error: "未安装 Electron。请先点「安装 Electron」（约 100MB，需联网），或手动双击 pet/start-electron.cmd。" });
           return;
         }
-        const log = join3(dir, "electron-launch.log");
+        const log = join2(dir, "electron-launch.log");
         let fd = -1;
         try {
           fd = openSync(log, "a");
@@ -3977,43 +3864,109 @@ function apply(ctx, config = {}) {
     ctx.effect(() => () => {
       if (typeof disposePetLaunch === "function") disposePetLaunch();
     }, "companion-fishgirl: pet launch http route");
-    const CABIN_ENDPOINT = "/api/companion-fishgirl/cabin-world";
-    const disposeCabinWorld = ctx.webServer.register({
+    const ROOM3D_ENDPOINT = "/api/companion-fishgirl/room3d";
+    const disposeRoom3d = ctx.webServer.register({
       kind: "exact",
-      path: CABIN_ENDPOINT,
-      handler: async (request, response) => {
+      path: ROOM3D_ENDPOINT,
+      handler: async (request2, response) => {
         const reply = (code, value) => {
           response.writeHead(code, { "content-type": "application/json; charset=utf-8", "cache-control": "no-store" });
           response.end(JSON.stringify(value));
         };
-        if (!isSameOrigin(request)) {
+        if (!isSameOrigin(request2)) {
           reply(403, { ok: false, error: "跨站请求已拒绝" });
           return;
         }
-        if (request.method !== "GET" && request.method !== "HEAD") {
-          response.writeHead(405, { allow: "GET, HEAD" });
-          response.end();
+        if (request2.method === "GET" || request2.method === "HEAD") {
+          try {
+            const h = await room3dHealth(room3dOpts());
+            reply(200, { ok: true, engine: "room3d", online: h.online, installed: room3dInstalled(room3dOpts()), port: runtimeOpts.room3dPort, url: `http://127.0.0.1:${runtimeOpts.room3dPort}/room/`, dir: (room3dDirs(room3dOpts())[0] || "").split(/[\\/]/).filter(Boolean).pop() || "" });
+          } catch (err) {
+            reply(200, { ok: true, online: false, error: String(err) });
+          }
           return;
         }
-        try {
-          reply(200, {
-            ok: true,
-            enabled: runtimeOpts.cabinWorldEnabled !== false,
-            // 只回显目录末级名，不把完整本机路径下发给浏览器。
-            dataDir: cabinFallbackDir().replace(/[\\/]+$/, "").split(/[\\/]/).pop() || "",
-            ...await cabinHealth({
-              dataDir: runtimeOpts.cabinWorldDataDir,
-              fallbackDir: cabinFallbackDir()
-            })
-          });
-        } catch (err) {
-          reply(200, { ok: true, enabled: false, online: false, reason: String(err) });
+        if (request2.method === "POST") {
+          const body = await readJson2(request2);
+          const action = body?.action || "launch";
+          if (action !== "launch" && action !== "open") {
+            reply(400, { ok: false, error: "非法 action" });
+            return;
+          }
+          const h = await room3dHealth(room3dOpts());
+          if (h.online) {
+            reply(200, { ok: true, started: false, alreadyRunning: true, url: `http://127.0.0.1:${runtimeOpts.room3dPort}/room/` });
+            return;
+          }
+          if (action === "open") {
+            reply(502, { ok: false, error: "3D 小屋服务未启动。" });
+            return;
+          }
+          const dir = room3dDirs(room3dOpts())[0];
+          if (!dir || !room3dInstalled(room3dOpts())) {
+            reply(502, { ok: false, error: `未找到 3D 小屋项目（默认 D:/FeiyuRoom3D）。请先在设置卡填写正确目录。` });
+            return;
+          }
+          const entry = join2(dir, "src", "bridge.js");
+          if (!existsSync2(entry)) {
+            reply(502, { ok: false, error: "缺少入口 src/bridge.js，项目不完整。" });
+            return;
+          }
+          const log = join2(dir, "room3d-launch.log");
+          let fd = -1;
+          try {
+            fd = openSync(log, "a");
+          } catch {
+          }
+          let child;
+          try {
+            child = spawn(process.execPath, [entry], {
+              cwd: dir,
+              env: cleanElectronEnv(),
+              detached: true,
+              windowsHide: true,
+              stdio: ["ignore", fd >= 0 ? fd : "ignore", fd >= 0 ? fd : "ignore"]
+            });
+          } catch (err) {
+            if (fd >= 0) {
+              try {
+                closeSync(fd);
+              } catch {
+              }
+            }
+            reply(502, { ok: false, error: "3D 小屋启动失败：" + String(err && err.message || err) });
+            return;
+          }
+          if (fd >= 0) {
+            try {
+              closeSync(fd);
+            } catch {
+            }
+          }
+          if (!child?.pid) {
+            reply(502, { ok: false, error: "3D 小屋进程未能启动。" });
+            return;
+          }
+          child.unref();
+          let ready = false;
+          for (let i = 0; i < 40; i++) {
+            await new Promise((done) => setTimeout(done, 500));
+            if ((await room3dHealth(room3dOpts())).online) {
+              ready = true;
+              break;
+            }
+          }
+          if (ready) reply(200, { ok: true, started: true, pid: child.pid, url: `http://127.0.0.1:${runtimeOpts.room3dPort}/room/` });
+          else reply(502, { ok: false, error: "3D 小屋进程已拉起，但 20 秒内未就绪。请查看 " + log });
+          return;
         }
+        response.writeHead(405, { allow: "GET, HEAD, POST" });
+        response.end();
       }
     });
     ctx.effect(() => () => {
-      if (typeof disposeCabinWorld === "function") disposeCabinWorld();
-    }, "companion-fishgirl: cabin-world http route");
+      if (typeof disposeRoom3d === "function") disposeRoom3d();
+    }, "companion-fishgirl: room3d http route");
   }
   function readJson2(req) {
     return new Promise((resolve2) => {
@@ -4141,7 +4094,6 @@ function apply(ctx, config = {}) {
       },
       output: textOutput,
       async execute(args) {
-        if (runtimeOpts.cabinWorldEnabled !== false) return { text: "当前已启用原版小屋世界（cabin-world），本地小窝工具已停用。请在设置卡关闭「原版小屋世界」后使用旧小窝，或用 cabin_* 工具照看她。" };
         const op = typeof args.op === "string" ? args.op : "status";
         const result = await companion.actHome(toolUid(), op, args ?? {}, Date.now());
         if (op === "status") {
@@ -4174,67 +4126,101 @@ ${log.join("\n")}` : "",
       }
     }), companionOnly);
   }
-  const cabinBridgeOpts = () => ({
-    dataDir: runtimeOpts.cabinWorldDataDir,
-    fallbackDir: cabinFallbackDir()
-  });
-  const CABIN_TOOL_DEFS = [
-    { name: "cabin_status", desc: "查看大肥鱼在小屋世界里的状态：在哪、零花钱、背包、饱腹/口渴/心情、正在做什么、天气。决定做什么前先看一眼。", params: { actor: { type: "string", description: "住户稳定编号；不填用默认住户" } } },
-    { name: "cabin_look", desc: "看看身边：当前房间有哪些家具和东西、每样能做什么（object 和 use 的 id）、出口通向哪里。找别的房间的东西用 cabin_catalog。", params: { actor: { type: "string", description: "住户编号；不填用默认" } } },
-    { name: "cabin_catalog", desc: "搜索所有可访问房间的家具及动作，无关键词按稳定编号分页。发现后用 cabin_use 执行。可搜五子棋、日记、钓鱼等。", params: { actor: { type: "string", description: "住户编号" }, query: { type: "string", description: "名称/说明/动作关键词；留空列出全部" }, space: { type: "string", description: "房间编号，如 arcade、xjhome、park" }, object: { type: "string", description: "精确物件编号" }, offset: { type: "number", description: "首页 0；下一页用返回的 nextOffset" }, limit: { type: "number", description: "每页数量，默认 20，上限 50" } } },
-    { name: "cabin_task", desc: "按任务编号查真实完成回执。running 仍在执行；done 才算成功；failed 要如实说。不要反复调 cabin_use 重开同一任务。返回 running 时用这个查。", params: { actor: { type: "string", description: "住户编号（须与发起任务者一致）" }, taskId: { type: "string", description: "cabin_use/cabin_go 返回的 taskId" } } },
-    { name: "cabin_go", desc: "走去一个地方，身体在游戏里真的一路走过去，到了才算到。地点：xjhome 家、park 公园、shop 小卖部、onsen 汤屋、arcade 电玩城、restaurant 餐厅。", params: { place: { type: "string", description: "地点 id 或中文名" }, zone: { type: "string", description: "可选：房间里的具体位置 id，见 cabin_look" }, actor: { type: "string", description: "住户编号" } } },
-    { name: "cabin_use", desc: "使用家具或街机。不知道 object/use 先用 cabin_catalog 搜，不能因为当前房间没列出就断言没有。写日记传 text；可自主指定 durationSeconds 或随时结束。返回 running 只是进行中，用 cabin_task 查回执。", params: { object: { type: "string", description: "物件 id，如 swing、fish_tank、onsen_soak" }, use: { type: "string", description: "用法 id，如 swing、feed_fish、soak" }, item: { type: "string", description: "仅 object=bag 或货架 use=buy 时：商品 id" }, feeling: { type: "string", description: "可选：此刻想法，会记进今天的生活" }, actor: { type: "string", description: "住户编号" }, text: { type: "string", description: "写日记正文，1–2000 字" }, mode: { type: "string", enum: ["npc", "solo", "duo", "join"], description: "电玩城/棋盘：npc 与电脑玩；duo 开桌；join 加入" }, durationSeconds: { type: "number", description: "休闲活动持续秒数：0=一直保持；1–3600 指定时长" } } },
-    { name: "cabin_farm", desc: "打理屋后的菜园（8 块菜畦，自带小金库和收成篮，与主钱包无关）。action=status 看菜畦/金币/收成篮/作物表与成长倒计时；till 翻土；plant 播种（crop 作物 id、plot 菜畦号 0-7，扣种子钱）；water 浇水加速；fertilize 施肥加速（扣3元）；harvest 收获成熟菜进收成篮；sell 卖收成换菜园钱（crop 留空卖全部，n 指定数量）；reset 需 confirm=true。离线也会继续长。写操作返回 taskId，running 时用 cabin_task 查回执。作物与价格见 status 返回的 crops。", params: { action: { type: "string", enum: ["status", "till", "plant", "water", "fertilize", "harvest", "sell", "reset"], description: "菜园操作，默认 status" }, plot: { type: "number", description: "菜畦编号 0-7（till/plant/water/fertilize/harvest 用）" }, crop: { type: "string", description: "作物 id：kelp/seaweed/clam/coral/starfruit/anemone/pearlfruit/moonjuice；sell 时留空卖全部" }, n: { type: "number", description: "sell 用：卖出数量，0 全卖" }, confirm: { type: "boolean", description: "reset 用：必须 true" }, feeling: { type: "string", description: "可选：此刻想法，记进今天的生活" }, actor: { type: "string", description: "住户编号" } } },
-    { name: "cabin_buy", desc: "去小卖部买一样东西：走到货架挑选再去收银台付钱，东西进背包。零花钱和背包格子由游戏管，钱不够会失败。", params: { product: { type: "string", description: "商品 id，如 soda、bread、hot_cocoa" }, feeling: { type: "string", description: "可选：想法" }, actor: { type: "string", description: "住户编号" } } },
-    { name: "cabin_eat", desc: "吃、喝或使用背包里的一样东西（按商品种类自动决定）。用完才从背包扣掉，被打断还在包里。", params: { product: { type: "string", description: "背包里的商品 id" }, feeling: { type: "string", description: "可选：想法" }, actor: { type: "string", description: "住户编号" } } },
-    { name: "cabin_stop", desc: "随时取消当前未提交的动作（走路、游戏、家具）。action=finish 只提前结束正在进行的休闲活动并记录体验。已提交的付款/吃完不能撤销。", params: { actor: { type: "string", description: "住户编号" }, action: { type: "string", enum: ["stop", "finish"], description: "stop 取消（默认）；finish 收尾休闲活动" }, reason: { type: "string", description: "结束原因" } } },
-    { name: "cabin_residents", desc: "列出住户编号、显示名字、各自房间和可用室内地图。", params: {} },
-    { name: "cabin_add_resident", desc: "新增一位机器人住户，分配独立默认房间。相同编号不会重复。不会创建或复制 AI 人格/记忆。", params: { key: { type: "string", description: "稳定编号" }, name: { type: "string", description: "显示名字" }, mapId: { type: "string", description: "可选：室内地图 id" } } },
-    { name: "cabin_assign_room", desc: "为住户换为地图编辑器保存的室内地图。mapId 留空恢复默认房间。", params: { actor: { type: "string", description: "住户编号" }, mapId: { type: "string", description: "地图 id；留空恢复默认" } } },
-    { name: "cabin_rename", desc: "修改显示名字，保留住户编号、背包、日记与身份。", params: { actor: { type: "string", description: "住户编号" }, name: { type: "string", description: "新名字" } } },
-    { name: "cabin_invite", desc: "邀请另一位已接入住户来自己家，返回客人可用的地点和棋盘编号；不会自动走动或发消息。", params: { actor: { type: "string", description: "主人编号" }, guest: { type: "string", description: "客人稳定编号" } } },
-    { name: "cabin_restaurant", desc: "查菜单或实际点餐、做菜、吃饭、入座。等待完成回执，不要把 accepted/running 当已吃完。like/dislike/neutral 需 dish 与 feeling，生成食后评价事件。", params: { actor: { type: "string", description: "住户编号" }, action: { type: "string", enum: ["menu", "status", "order", "cook", "eat", "sit", "cancel", "like", "dislike", "neutral"], description: "动作" }, dish: { type: "string", description: "菜名/编号" }, feeling: { type: "string", description: "食后评价的主观理由，1–300 字" } } },
-    { name: "cabin_furniture", desc: "查看当前房间中已摆放的自制家具及为自己配置的动作。用返回的 object/use 编号调 cabin_use。", params: { actor: { type: "string", description: "住户编号" } } },
-    { name: "cabin_process", desc: "管理自己的一个主活动和多个副活动：身体活动只执行一项，其余排队；chat/think/read 是实际执行的认知/交流活动。可 promote 改变主次、stop 中断、finish 收尾。这是让大肥鱼自己过日子的核心工具。", params: { actor: { type: "string", description: "住户编号" }, action: { type: "string", enum: ["list", "start", "promote", "stop", "finish"], description: "动作" }, id: { type: "string", description: "活动编号；promote 也可填 chat/think/read" }, kind: { type: "string", enum: ["body", "chat", "think", "read"], description: "活动类型" }, role: { type: "string", enum: ["primary", "secondary"], description: "主/副" }, label: { type: "string", description: "活动标签" }, tool: { type: "string", enum: ["cabin_go", "cabin_use", "cabin_buy", "cabin_eat", "cabin_restaurant"], description: "身体工具名" }, arguments: { type: "object", description: "身体工具参数；actor 由当前住户强制绑定" } } },
-    { name: "cabin_rename_home", desc: "修改自建私人房间名称，1–32 字，不改住户名字/编号/家具。", params: { actor: { type: "string", description: "住户编号" }, name: { type: "string", description: "新房间名" } } },
-    { name: "cabin_remove_resident", desc: "按用户明确意愿删除自建住户及私人房间。不能删内置住户；访客须先离开，未完成付款不能撤销。confirm 须与 actor 完全一致。", params: { actor: { type: "string", description: "住户编号" }, confirm: { type: "string", description: "再次输入要删除的准确编号" } } },
-    { name: "cabin_update_plan", desc: "用户问到小屋世界 1.1 更新/新功能/想回到旧样子时首先调用。逐项列出可选内容、更新与保留原版的区别、外观变化与存档影响。只读不修改。", params: {} },
-    { name: "cabin_update_apply", desc: "仅按用户逐项明确的选择启用或关闭 1.1 内容；未回答的项目保持当前状态，首次未选择保留原版。先 cabin_update_plan 讲清楚并征得同意再调。", params: { modules: { type: "object", description: ' {"模块id": true 开 / false 关}，没写的保持不变' }, reason: { type: "string", description: "用户为什么这样选" } } },
-    { name: "cabin_update_undo", desc: "撤销最近一次 1.1 模块更改，恢复到更改前的选择。用户说改回去/不想要刚才的更改时用。重启游戏生效。", params: {} }
-  ];
-  for (const def of CABIN_TOOL_DEFS) {
-    ctx.tools.register(defineTool({
-      name: def.name,
-      description: def.desc,
-      parameters: def.params,
-      output: textOutput,
-      async execute(args) {
-        if (runtimeOpts.cabinWorldEnabled === false) return { text: "小屋世界桥接已在设置里关闭，无法使用。" };
-        const a = { ...args ?? {} };
-        if (typeof a.actor === "string" && !a.actor.trim()) delete a.actor;
-        try {
-          const data = await callCabin(cabinBridgeOpts(), def.name, a);
-          return { text: cabinResultText(def.name, data) };
-        } catch (e) {
-          return { text: `【小屋世界】${e?.message || "调用失败"}` };
-        }
-      }
-    }), companionOnly);
-  }
+  const room3dOpts = () => ({ dataDir: runtimeOpts.room3dDir, port: runtimeOpts.room3dPort });
   ctx.tools.register(defineTool({
-    name: "cabin_bridge_health",
-    description: "检查本机小屋世界（cabin-world）游戏与桥是否在运行。用户说小窝没反应、工具连不上时先查这个。",
+    name: "room3d_status",
+    description: "查看 3D 小屋此刻的真实状态：所在房间、天气时段、她的姿势/心情、房间好感、8 块菜畦与金币/仓库。问「你在干嘛」或想安排生活前先查这个。",
     parameters: {},
     output: textOutput,
     async execute() {
-      if (runtimeOpts.cabinWorldEnabled === false) return { text: "小屋世界桥接已在设置里关闭；cabin_* 工具不可用，可改用 companion_home 照看本地小窝。" };
       try {
-        const h = await cabinHealth(cabinBridgeOpts());
-        return { text: h.online ? "【小屋世界】桥在线，游戏已连接，可以用 cabin_* 工具了。" : `【小屋世界】桥未就绪：${h.reason || "未知"}。请双击 CabinWorld 文件夹里的 start.cmd 启动游戏和桥，等显示「准备好了」再试。` };
+        return { text: room3dText(await room3dState(room3dOpts())) };
       } catch (e) {
-        return { text: `【小屋世界】${e?.message || "检查失败"}` };
+        return { text: `【3D 小屋】${e?.message || "读取失败"}` };
       }
+    }
+  }), companionOnly);
+  ctx.tools.register(defineTool({
+    name: "room3d_act",
+    description: "在 3D 小屋里做一个动作，页面里会真的动起来。action 可选：command(走动，配 room/spot/pos 或 free 自由走)、pet 摸头、poke 戳一下、feed 喂食、water 倒水、play 陪玩、talk 留言(需 text)、sleep 睡觉、wake 起床、lamp 开关灯(可配 on)。",
+    parameters: {
+      action: { type: "string", enum: ["command", "pet", "poke", "feed", "water", "play", "talk", "sleep", "wake", "lamp"], description: "动作" },
+      room: { type: "string", description: "command 用：房间 id，见 room3d_status 的 layout.rooms" },
+      spot: { type: "string", description: "command 用：具体位置 id" },
+      pos: { type: "object", description: "command 用：坐标 {x,z}" },
+      free: { type: "boolean", description: "command 用：自由走动" },
+      on: { type: "boolean", description: "lamp 用：开/关灯" },
+      text: { type: "string", description: "talk 用：留言内容" }
+    },
+    output: textOutput,
+    async execute(args) {
+      const a = { ...args ?? {} };
+      if (a.action === "talk" && !String(a.text || "").trim()) return { text: "【3D 小屋】留言不能为空。" };
+      try {
+        return { text: room3dText(await home3dAct(room3dOpts(), a)) };
+      } catch (e) {
+        return { text: `【3D 小屋】${e?.message || "动作失败"}` };
+      }
+    }
+  }), companionOnly);
+  ctx.tools.register(defineTool({
+    name: "room3d_garden",
+    description: "打理屋后菜园（8 块田、12 种作物，离线继续长）。action=status 看田地/金币/种子/仓库，或用：till 松土(plotId)、plant 播种(plotId+cropId)、water 浇水(plotId)、fertilize 施肥(plotId)、harvest 收获(plotId)、sell 卖出(cropId+quantity)、buySeed 买种子(cropId+quantity)、buyCompost 买堆肥(quantity)。作物 id 见 status 返回的 crops。",
+    parameters: {
+      action: { type: "string", enum: ["status", "till", "plant", "water", "fertilize", "harvest", "sell", "buySeed", "buyCompost"], description: "菜园操作，默认 status" },
+      plotId: { type: "number", description: "田块编号 0-7（till/plant/water/fertilize/harvest 用）" },
+      cropId: { type: "string", description: "作物 id：radish/carrot/lettuce/tomato/cucumber/eggplant/pepper/pumpkin/corn/strawberry/potato/cabbage" },
+      quantity: { type: "number", description: "数量 1-99（sell/buySeed/buyCompost 用）" }
+    },
+    output: textOutput,
+    async execute(args) {
+      const a = { ...args ?? {} };
+      const action = a.action || "status";
+      if (action === "status") {
+        try {
+          return { text: room3dText(await room3dState(room3dOpts())) };
+        } catch (e) {
+          return { text: `【3D 小屋】${e?.message || "读取菜园失败"}` };
+        }
+      }
+      const body = { type: action };
+      if (typeof a.plotId === "number") body.plotId = a.plotId;
+      if (typeof a.cropId === "string") body.cropId = a.cropId;
+      if (typeof a.quantity === "number") body.quantity = a.quantity;
+      try {
+        return { text: room3dText(await garden3dAct(room3dOpts(), body)) };
+      } catch (e) {
+        return { text: `【3D 小屋·菜园】${e?.message || "操作失败"}` };
+      }
+    }
+  }), companionOnly);
+  ctx.tools.register(defineTool({
+    name: "room3d_care",
+    description: "让 3D 小屋里的她照料菜园。type=auto 开/关自主照料（需 enabled 布尔值），visit 请她去菜园，careNow 立即照料一轮。",
+    parameters: {
+      type: { type: "string", enum: ["auto", "visit", "careNow"], description: "照料方式" },
+      enabled: { type: "boolean", description: "type=auto 时用：true 开自主照料，false 暂停" }
+    },
+    output: textOutput,
+    async execute(args) {
+      const a = { ...args ?? {} };
+      if (!a.type) a.type = "auto";
+      try {
+        return { text: room3dText(await garden3dControl(room3dOpts(), a)) };
+      } catch (e) {
+        return { text: `【3D 小屋·照料】${e?.message || "操作失败"}` };
+      }
+    }
+  }), companionOnly);
+  ctx.tools.register(defineTool({
+    name: "room3d_bridge_health",
+    description: "检查本机 3D 小屋服务（127.0.0.1:13100）是否已启动、浏览器 /room/ 是否可打开。用户说 3D 小窝打不开、工具连不上时先查这个。",
+    parameters: {},
+    output: textOutput,
+    async execute() {
+      const h = await room3dHealth(room3dOpts());
+      const installed = room3dInstalled(room3dOpts());
+      return { text: h.online ? `【3D 小屋】服务在线，浏览器打开 http://127.0.0.1:${runtimeOpts.room3dPort}/room/ 即可看到小屋。项目目录${installed ? "已就绪" : "未找到默认安装 D:/FeiyuRoom3D"}。` : `【3D 小屋】服务未启动：请在 ${room3dDirs(room3dOpts())[0] || "D:/FeiyuRoom3D"} 执行 npm start，再打开 /room/ 。` };
     }
   }), companionOnly);
   ctx.tools.register(defineTool({
@@ -4429,7 +4415,7 @@ ${log.join("\n")}` : "",
     }), companionOnly);
     const petApi = async () => {
       if (!runtimeOpts.petBridgeEnabled) return null;
-      return readPetApi(runtimeOpts.petApiPath, [join3(PLUGIN_DIR, "..", "pet"), join3(PLUGIN_DIR, "pet")]);
+      return readPetApi(runtimeOpts.petApiPath, [join2(PLUGIN_DIR, "..", "pet"), join2(PLUGIN_DIR, "pet")]);
     };
     ctx.tools.register(defineTool({
       name: "companion_pet",
@@ -4550,7 +4536,7 @@ ${log.join("\n")}` : "",
           if (st.size > cap) {
             throw new Error(`companion_show_media: ${path} (${st.size} 字节) 超过读取上限 ${cap} 字节`);
           }
-          const data = await readFile3(path);
+          const data = await readFile2(path);
           if (data.byteLength > cap) {
             throw new Error(`companion_show_media: ${path} (${data.byteLength} 字节) 超过读取上限 ${cap} 字节`);
           }

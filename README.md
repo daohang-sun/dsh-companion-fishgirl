@@ -66,8 +66,8 @@
 | 能力 | 说明 |
 |---|---|
 | 🖼️ 图片 / 视频展示 | `companion_show_media` 让大肥鱼在回答里贴出本地图片/视频，或把搜索到的 HTTP(S) 图片链接交给宿主下载展示：模型只看到文本路径/URL，字节走展示通道**不进会话历史、不重复占 token**；点图放大、视频可播放 |
-| 🏠 鱼鱼小窝 | 直接接入 GitHub 原版 **cabin-world** 游戏：她有真实的身体、零花钱、背包与日记，能在家/公园/小卖部/汤屋/电玩城/餐厅之间走动、买东西、吃饭、下棋、写日记；**并在原版游戏源码里新增了屋后菜园**（8 畦 8 种作物、离线生长、自包含金币与收成篮）。模型用 23 个 `cabin_*` 工具主动安排她的生活。需本机解压官方 Release 并启动 `start.cmd`，插件内置桥客户端连接（不接 MCP、不改 DSH 全局配置） |
-| 🐟 真 Live2D 桌宠 | `pet/` 独立桌宠，默认用 **Windows 系统自带的 Edge WebView2**（无外接游戏引擎、无 Electron）：真正加载你本机解压的**大肥鱼 Cubism 4 模型**（23 表情 / 8 动作 / 4K 贴图），透明置顶、拖拽、F9 鼠标穿透；本机 HTTP 双向桥接让面板与模型都能发台词/表情/动作。默认桥接关，模型需你本机解压 |
+| 🏠 鱼鱼小窝 | 3D 海底小屋（[feiyu-room-template](https://github.com/SQDFeng/feiyu-room-template)）：Three.js 房间 + 屋后 8 畦菜园，模型用 5 个 `room3d_*` 工具驱动走动、摸头、喂食、留言、睡觉与种田。侧栏的像素房间 / 院子 / 画册由 `companion_home` 照看。Godot 像素引擎已在 v0.27.0 移除 |
+| 🐟 真 Live2D 桌宠 | `pet/` 独立 Electron 桌宠：真正加载你本机解压的**大肥鱼 Cubism 4 模型**（23 表情 / 8 动作 / 4K 贴图），透明置顶、点击拖拽；本机 HTTP 双向桥接让面板与模型都能发台词/表情/动作。默认桥接关，桌宠程序与模型需你本机安装 |
 | ⚙️ 配置卡 | 设置 → 插件 → dsh-companion-fishgirl：总开关 + 分组开关 + 记忆类型下拉，即时生效 |
 
 ---
@@ -313,49 +313,28 @@ npm install --no-save "file:<插件目录>"
 
 ## 鱼鱼小窝
 
-鱼鱼的小窝**就是 GitHub 原版 cabin-world 项目**（VADS，MIT 代码 / CC BY 4.0 美术）——一个真正运行的 Godot 像素世界，不是插件画的模拟场景。教程、家具手册与协议见 [原版仓库](https://github.com/BabyBus2022/cabin-world)。
+v0.27.0 起小屋引擎**只保留 3D 海底小屋**：Godot 像素小屋（cabin-world）的桥、`cabin_*` 工具和设置入口已移除。Live2D 桌宠完全不受影响；侧栏的像素房间 / 院子 / 画册仍是本地小窝的视图，由 `companion_home` 照看。
 
-### 先装好游戏（一次性）
+### 3D 海底小屋
 
-1. 从 [Releases](https://github.com/BabyBus2022/cabin-world/releases/latest) 下载 `CabinWorld-1.1-win64.zip`（约 287 MB），解压到固定目录，例如 `D:\CabinWorld`。
-2. 双击该目录里的 `start.cmd`：它会启动本机桥（默认 `127.0.0.1:18790`）再打开游戏窗口，看到「准备好了」即成功。
-3. 在插件设置卡「记忆与小窝 → 原版小屋世界」确认开关已开、状态灯变绿；`cabinWorldDataDir` 指向解压目录的 `data` 文件夹（默认 `D:/CabinWorld/data`，与设置卡一致，改过路径就在设置卡里填）。
+项目已装在 **`D:/FeiyuRoom3D`**（只取核心源码 + 6.7MB 优化 3D 模型，跳过 58MB 原始模型与两个安装包；`npm ci` 已装依赖）。启动方式三选一：
 
-> 桥的地址和一次性 token 写在 `<CabinWorld>/data/bridge.json`。插件只读这个文件、**token 只在插件进程内使用，绝不进模型上下文或提示词**。所有调用都走回环地址，且**端口必须与 `bridge.config.json` 一致**（防止被改写的 `bridge.json` 把工具参数转到本机其它服务）；不跟随重定向。桥本身只监听 `127.0.0.1` 并拒绝浏览器跨站请求。桥返回给模型的文本会过滤所有 token/secret/password 类字段并截断长度，避免超长内容灌进上下文。设置卡「小屋世界数据目录」可改 bridge.json 所在路径（默认 `D:/CabinWorld/data`，或设环境变量 `CABINWORLD_DATA_DIR`）。
+1. **dsh 面板一键启动**：侧栏「鱼鱼小窝 → 3D 小屋」点「启动 3D 小屋」，会自动拉起服务并打开浏览器 `/room/`。
+2. **设置卡按钮**：「记忆与小窝 → 启动 3D 小屋」，状态灯变绿即就绪。
+3. **手动**：双击 `D:/FeiyuRoom3D/start.cmd`，再打开 `http://127.0.0.1:13100/room/`（结尾 `/` 不能少）。
 
-### 她在小屋里做什么
+**只玩房间不需要 QQ / SnowLuma / 改 DSH 全局 preset**：本地 `config.json` 已关掉 QQ 网关、社交与 MCP，只留回环房间 API 和随机控制台 token。插件通过回环 REST 直连，不接它的 MCP，也不下发它的 token 给浏览器。
 
-游戏本体管这些，插件不重复实现：
+- **她会做什么**：3D 大平层里走动、摸头、戳一下、喂食、倒水、陪玩、留言贴到记忆墙、睡觉起床、开关灯；屋后 8 畦菜地、12 种作物（小萝卜/胡萝卜/番茄/南瓜/玉米/草莓…），松土→播种→浇水→施肥→收获→卖出，作物离线继续长；还能让她自主照料菜园。
+- **工具**：`room3d_status`（房间/时段/姿势/菜园快照）、`room3d_act`（房间动作）、`room3d_garden`（菜园全流程）、`room3d_care`（自主照料）、`room3d_bridge_health`（自检服务）。每轮小窝提示词注入 3D 小屋指引，问「你在干嘛」先查工具再答。
+- **数据**：房间状态、大平层状态、菜园各自存在项目的 `state/*.json`；浏览器页面与 DSH 工具读写同一份存档，看到的是同一只鱼、同一块菜园。
+- **安全**：插件侧 `src/room3d-client.ts` 只连回环地址、端口固定白名单（默认 13100）、路径白名单、过滤返回里的敏感字段与截断长度；设置/启动路由同源校验，跨站 403。
+- 3D 模型版权归原作者，仅个人非商业展示；2D 立绘来自 dsh-pet（CC BY-NC-SA 4.0）。详见项目根目录的 `README.md` / `PRIVACY_AND_ASSETS.md` / `THIRD_PARTY_NOTICES.md`。
 
-- **六个地点**：小鲸鱼家、公园、小卖部、汤屋（从公园进）、电玩城、餐厅，她会真的一路走过去（穿过门），不是瞬移。
-- **真实的生活数值与物品**：零花钱、背包（12 格）、饱腹 / 口渴 / 心情、日记，都在游戏里；会饿会渴，钱不够买不了东西。
-- **家具与活动**：荡秋千、喂鱼、泡汤、看海、沙发躺、写日记、五子棋 / 象棋 / 贪吃蛇 / 扫雷等；1.1 还有家具工坊、地图编辑器、四季节日、多住户与串门。
-- **任务回执**：活动返回 `running` 只是进行中，`done` 才算真做完，`failed` 如实说——不会把"下单成功"说成"已经吃完"。
+### 侧栏像素视图
 
-### 模型主动安排生活
+侧栏「此刻 / 院子 / 画册」使用的是插件自带的本地小窝数据与像素素材（源自 cabin-world 的 CC BY 4.0 美术，已署名），由 `companion_home` 工具驱动。它和 3D 小屋是同一只鱼的两种视图，**各自独立存档、互不覆盖**。Godot 游戏本体与 `cabin_*` 工具已不再被插件调用；`assets/cabin/furniture/` 下的自制家具素材仅作为历史美术资产保留。
 
-小窝的"自主生活"由 DeepSeek 驱动，插件只提供工具与一行指引（不搞定时器/离线补演这类模拟）：
-
-- 每轮动态摘要注入一行「小窝·原版小屋世界」，告诉模型她有真实身体、要用工具做事、按真实状态回答。
-- 23 个 `cabin_*` 工具交给模型：`cabin_status` 看状态 → `cabin_look`/`cabin_catalog` 找家具 → `cabin_go`/`cabin_use`/`cabin_buy`/`cabin_eat`/`cabin_restaurant` 去做事 → `cabin_task` 查回执；`cabin_process` 管理主/副活动（让她一边听歌一边做饭这类）；`cabin_bridge_health` 自检桥是否在线。
-- **屋后菜园**：游戏本体新增的菜园系统（在本机 `CabinWorld/game/core/farm.gd`，随新 EXE 分发）。`cabin_farm` 一个工具打理 8 块菜畦、8 种作物：`status` 看菜畦/金币/收成篮/作物表和成长倒计时，`till` 翻土、`plant` 播种（扣种子钱）、`water` 浇水 / `fertilize` 施肥（加速成熟）、`harvest` 收获进收成篮、`sell` 卖菜换菜园钱、`reset` 清空。菜园有独立的小金库（初始 60）与收成篮，与主钱包分离；成长按真实时间推进，**关了 DSH/QQ 也照样长**。游戏侧用 `safe_store.gd` 原子写 `farm.json`，桥侧走走到屋后 → 动画 → 一次性提交的回执事务，不会因跨文件失败而重复结算。
-- 问「你在干嘛」时模型会先查 `cabin_status` 再答，不会凭空编；没做过的不说成做过。
-
-### 兼容与回退
-
-- 插件设置卡可随时开关「原版小屋世界」，即时生效：开启时 `cabin_*` 工具可用、`companion_home` 提示改用原版；关闭时反过来，回到旧的自研 2D 像素小屋（种田 / 画册 / 离线补演那套）。两套工具都注册、在调用时按开关互斥，切换开关无需重启。
-- 侧栏面板的像素小屋 / 院子 / 画册页签是旧自研小窝的视图；启用原版后，**真实生活以游戏窗口与 `cabin_*` 工具为准**。
-- `pet/` 的真 Live2D 桌宠与本小窝互不依赖，详见下一章。
-
-> 原版美术来自 cabin-world（VADS，CC BY 4.0），已按许可署名；插件不改其 Godot 游戏、只通过本机桥调用。仓库内 `assets/cabin/` 另留有 14 张本插件 AI 绘制的素材（`motion-*` 角色动作 6 组、`fish-*` 小窝物件 8 件），供旧自研小窝视图使用。
-
-### 游戏内自制家具（TeleAgent 重绘版）
-
-小鲸鱼家里已摆入 14 件自制家具：4×2 菜园（空畦 / 生长 / 丰收三态）、鱼鱼日记角、合上的日记本、三幅画（鲸鱼海景 / 海边小屋 / 珊瑚鱼群）和八件海洋小摆件。素材由 Telegram/updream 按统一像素风重绘，底部「AI 生成」水印带已裁掉，成品在 `assets/cabin/furniture/`，预览见 `assets/cabin/furniture-preview.png`。
-
-- 导入脚本：`python tools/build_cabin_furniture.py`（需先启动 `D:/CabinWorld/start.cmd`）；`--build-only` 只裁图，`--reset-only` 在启动游戏前清掉旧库条目。原图来自 `C:/Users/sdhxa/.local/share/TeleAgent/TeleAgent的工作空间/`，不会被覆盖或删除。
-- 菜园会跟 `farm.json` 状态自动换贴图：翻土/播种显示空畦或嫩芽，作物成熟显示丰收图；切换由桥写入布局并发送 `home.reload` 帧完成，无需重启游戏。
-- 已知取舍：这些是 floor 层装饰家具（不挡路、不可互动），只是视觉层；真正的菜园数值与收成仍以 `cabin_farm` 工具与 `farm.json` 为准。
 
 ---
 
@@ -365,9 +344,9 @@ npm install --no-save "file:<插件目录>"
 
 ### 它能做什么
 
-- **真正加载模型**：`大肥鱼.model3.json` + `.moc3`（moc3 v5 / Cubism 5）+ 贴图 + `physics3.json`，用 pixi-live2d-display 在**透明置顶窗口**里渲染（PixiJS 7.4.3 + Cubism Web R7，Core 5.x 与 moc3 v5 匹配）。窗口外壳默认用 **Windows 系统自带的 Edge WebView2 Runtime**（v0.26.0 起，无需 Electron、无外接游戏引擎），Electron 仅作回退。原始 `model3.json` 没有 Expressions/Motions 字段——桌宠服务自动扫描 `Exp3/` 与 `Animation/` 生成增强版 manifest，于是 **23 个表情**（脸红/爱心眼/圈圈眼/黑脸/流泪/兔牙/单片眼镜…）与 **8 个动作**（IDLE/举手/狗尾草/竖手指/脱捕…）都能播放，物理摆动照常。
+- **真正加载模型**：`大肥鱼.model3.json` + `.moc3`（moc3 v5 / Cubism 5）+ 贴图 + `physics3.json`，用 pixi-live2d-display 在 Electron 透明置顶窗口里渲染（PixiJS 7.4.3 + Cubism Web R7，Core 5.x 与 moc3 v5 匹配）。原始 `model3.json` 没有 Expressions/Motions 字段——桌宠服务自动扫描 `Exp3/` 与 `Animation/` 生成增强版 manifest，于是 **23 个表情**（脸红/爱心眼/圈圈眼/黑脸/流泪/兔牙/单片眼镜…）与 **8 个动作**（IDLE/举手/狗尾草/竖手指/脱捕…）都能播放，物理摆动照常。
 - **自动处理模型兼容**：启动时把超限贴图（原始最高 8192×8192，超过很多真机 WebGL 上限）用纯 Node 零依赖方式缩到 **≤2048**，缓存到 `pet/.texcache/`（按模型 hash 隔离、可复用），`runtime.model3.json` 自动指向缓存；原模型目录只读。加载时把 Cubism 5 模型的蒙版数（49 组）按 `renderTextureCount=2`（上限 64）和 2048 的蒙版缓冲初始化，避免五官/头发遮罩串位与边缘毛边；切换表情前复位自定义参数、离散开关首帧直接写值，避免多个表情叠加残留。**这些修复都只改运行时，不动模型文件**。
-- **交互**：透明无边框、置顶。WebView2 宿主下拖动窗口顶部移动、点她触发表情与动作；**F9** 切换鼠标穿透，**Ctrl+Shift+Q** 退出。Electron 回退模式下为整窗拖动 + 托盘菜单。
+- **交互**：透明无边框、置顶、可拖动（拖动按帧合并 IPC，不闪）；点她会触发表情与动作；托盘可显示/隐藏、切鼠标穿透、退出。
 - **双向桥接**：桌宠本机 HTTP（只监听 127.0.0.1、Bearer token）暴露 `/api/state`（当前表情/动作/显示状态 + 表情动作目录）、`/api/commands`（插件→桌宠命令队列）、`/api/events`（桌宠→插件事件队列）、`/api/action`、`/api/reload`，并兼容旧 `/say`、`/call/<tool>`。面板与模型都能发台词、表情、动作；面板还能读到桌宠点击/拖拽事件。
 - **共享临场意图（presence）**：一份「表情 + 动作 + 短气泡」的意图可同时作用于 Live2D 桌宠和面板里的像素小屋/院子，让两种形象表现同一状态（带去重与过期，重连不重播）。面板桌宠 tab 有「临场意图」入口，模型可用 `companion_pet` 的 `op=presence` 主动触发。
 - **安全**：`api.json` 的 token **只在 dsh 宿主进程与桌宠进程之间使用，绝不下发浏览器客户端**；面板只调本插件的 `/api/companion-fishgirl/pet` 路由。
@@ -376,14 +355,14 @@ npm install --no-save "file:<插件目录>"
 
 1. **解压模型**：把 `DeepSeek免费公皮.zip` 里的 `DeepSeek` 文件夹解压到任意目录（里面有 `大肥鱼.model3.json` 和 `.moc3`）。**本插件不打包、不分发模型文件**——只读你自己解压的目录。
 2. **配置路径**：把 `pet/config.example.json` 复制为 `pet/config.json`，填 `modelPath` 为该目录（也可在启动时用环境变量 `DSH_FISH_MODEL` 指定）。
-3. **在 dsh 里一键启动（推荐）**：打开侧栏「🐟 鱼鱼小窝 → Live2D 桌宠」，顶部卡片点 **「🚀 启动桌宠」** 即可，**不用再去文件管理器双击**。插件宿主进程在本机用 `python pet/webview2/host.py` 拉起系统 WebView2 桌宠（浏览器端不碰进程），启动成功后自动打开桥接。需要 **Python 3** 与 **Edge / WebView2 Runtime**（Windows 上通常已预装）；状态卡会显示当前引擎为 `webview2`。启动日志写在 `pet/webview2/host-launch.log`。
-   - 也可以手动双击 `pet/start-webview2.cmd`（系统 WebView2 窗）、`pet/start.cmd`（离线浏览器窗）或 `pet/start-electron.cmd`（Electron 回退窗），效果相同。
+3. **在 dsh 里一键启动（推荐）**：打开侧栏「🐟 鱼鱼小窝 → Live2D 桌宠」，顶部「启动 Live2D 桌宠」卡片点 **「🚀 启动 Electron 桌宠」** 即可，**不用再去文件管理器双击**。按钮由插件宿主进程在本机拉起 Electron（浏览器端不碰进程），启动成功后自动打开桥接；若提示未安装 Electron，点 **「安装 Electron」** 等后台安装完成再启动。启动日志写在所选桌宠目录的 `electron-launch.log`。
+   - 也可以继续手动双击 `pet/start.cmd`（零依赖离线浏览器窗）或 `pet/start-electron.cmd`（透明置顶 Electron 窗），效果相同。
 4. **开桥接（二选一，即时生效无需重启 dsh）**：
    - **最快**：上面的一键启动会自动开启；若桌宠已先手动启动，tab 里橙色「桥接未开启」下方点 **「一键开启桥接」**。
    - **或在设置卡**：dsh 左侧栏「插件」→ 找到 dsh-companion-fishgirl → 详情页底部的配置卡里打开 **「Live2D 桌宠桥接」** 开关。  
      开好后该 tab 会显示绿色「已连接 · 大肥鱼真 Live2D」、真实表情/动作目录与点击/拖拽事件流；模型也可用 `companion_pet` 工具直接驱动。
-5. **装在不同机器/目录**：设置卡「桌面形象」的 **「桌宠安装目录」** 填含 `webview2/host.py` 的那个 `pet` 文件夹绝对路径（留空自动探测，**优先用本插件自带的 codearts 版本 `pet/`**）；也可用环境变量 `DSH_FISH_PET_DIR` 覆盖。`petApiPath` 仍可单独指定 `api.json` 的绝对路径。旧版 WHALEL2D/DeepFish 桌宠仍能通过 `/say`、`/call/<tool>` 兼容接入。
-6. **目录放哪里更好（v0.26.0 起改为随插件走）**：桌宠程序（含系统 WebView2 宿主与 Loader）现在**随 codearts 版本插件一起放在 `dsh-companion-fishgirl/pet/`**，只读取你本机解压的模型目录（如 `D:/Study/DSH项目/DeepSeek免费公皮/DeepSeek/`）。这样切换 codearts / deepseek personality 平行版本时，桌宠外壳自动跟随，不会错位；`config.json`（含本机 `modelPath` / token）仍是本机私有、不入库。若你把桌宠搬到了别处，用设置卡的「桌宠安装目录」指过去即可。
+5. **装在不同机器/目录**：设置卡「桌面形象」新增 **「桌宠安装目录」**，填含 `main.js` / Electron 的那个 `pet` 文件夹绝对路径（留空自动探测，会优先选已装 Electron 且配好模型的那份）；也可用环境变量 `DSH_FISH_PET_DIR` 覆盖。`petApiPath` 仍可单独指定 `api.json` 的绝对路径。旧版 WHALEL2D/DeepFish 桌宠仍能通过 `/say`、`/call/<tool>` 兼容接入。
+6. **目录放哪里更好**：桌宠是**独立程序**，应放在不随插件版本更新的稳定目录。当前已把 Electron 与桌宠程序整体挪到 `D:/Study/DSH项目/pet/`，模型放在 `D:/Study/DSH项目/DeepSeek免费公皮/DeepSeek/`，两者都在插件目录之外。这样插件升级/切换 codearts 与 deepseek personality 两个平行版本时，不用重装 Electron、不用重填模型路径；`petDir` 已写入 `~/.dsh/companion-fishgirl/settings.json`，自动探测也会优先找这个新位置。
 
 ### 合规与署名（务必阅读）
 
@@ -771,8 +750,8 @@ npm run build
 | dsh-hippocampus         | [coner13/dsh-hippocampus](https://github.com/coner13/dsh-hippocampus)                                                                         | 原话流档：原话只增不改、归属四类、`trace` 不可被模糊召回顶替；未采用其 PolyForm 许可代码，本插件用纯函数重写、零依赖                                                                                                                 |
 | dsh-memory-tiers        | [1129742588/dsh-memory-tiers](https://github.com/1129742588/dsh-memory-tiers)                                                                 | 分层档：L1→L2→L3 蒸馏、删除前先写台账、重要度分档；未采用其分流模型/embed/rerank/API key                                                                                                                         |
 | 鱼鱼窝                     | [Yuuyuko-uu/dsh-fish-home](https://github.com/Yuuyuko-uu/dsh-fish-home)                                                                       | 小窝玩法：生活数值、种田、做饭与防刷；自主生活：「手里这件事到点了才换下一件」、生活流、画架产出进画册。未采用其 3D 房间、Live2D/MMD 模型、SSE 事件桥与独立进程                                                                                           |
-| cabin-world             | [BabyBus2022/cabin-world](https://github.com/BabyBus2022/cabin-world)（VADS，MIT 代码 / CC BY 4.0 美术）                                             | 鱼鱼小窝的底座：内置桥客户端通过本机 `/v1/tool` 调其 Godot 游戏的 22 个工具（走动/家具/买吃/餐厅/日记/多住户/1.1 模块），模型用 `cabin_*` 主动安排生活；不接 MCP、不改 DSH 全局配置、不分发游戏本体（用户自行下载）。`assets/cabin/` 另留 14 张 AI 素材供旧小窝视图用                                       |
-| feiyu-room-template     | [sh2234113/feiyu-room-template](https://github.com/sh2234113/feiyu-room-template)                                                             | 3D 房间（Three.js）+ 菜园 + 电视陪伴的参考；本插件未采用 3D 引擎或它的 `.glb` 模型（体积/宿主兼容/授权考虑），改用自包含 Canvas 像素小屋                                                                                             |
+| cabin-world             | [BabyBus2022/cabin-world](https://github.com/BabyBus2022/cabin-world)（VADS，MIT 代码 / CC BY 4.0 美术）                                             | 曾是 2D 小窝引擎；v0.27.0 起 Godot 游戏与 `cabin_*` 工具已移除。`assets/cabin/` 的 CC BY 4.0 房间素材与 14 张 AI 绘制素材继续供侧栏像素视图使用                                                                                           |
+| feiyu-room-template     | [SQDFeng/feiyu-room-template](https://github.com/SQDFeng/feiyu-room-template) v3.0.0（MIT）                                                  | 当前 3D 小屋底座：Three.js 房间 + 屋后菜园 + 电视陪伴；只取核心源码与优化模型，只开房间不接 QQ / MCP；插件通过回环 REST 驱动                                                                                             |
 | DeepFish / WHALEL2D 桌宠  | [Rockau/DeepFish-desktop-pet](https://github.com/Rockau/DeepFish-desktop-pet)、[Ssssshaiiko/WHALEL2D](https://github.com/Ssssshaiiko/WHALEL2D) | 桥接思路（`api.json` + `/say` + `〔动作〕` 台词）；本插件自带 `pet/` 桌宠程序并保留对其旧协议的兼容。其 PolyForm 非商用模型不在仓库，未使用                                                                                         |
 | 大肥鱼 Live2D 模型           | 神宫凉子免费配布（原画：神宫凉子；建模：霓虹猫_NeonNeko）                                                                                                             | `pet/` 桌宠加载的真实 Cubism 4 模型来源。个人使用/创作可，禁止二次销售与擅自再分发；本插件不含模型文件，只读用户自己解压的目录                                                                                                            |
 | dsh-1024-game           | [akiwu/dsh-1024-game](https://github.com/akiwu/dsh-1024-game)                                                                                 | 面板挂载方式：`main`(keyed) + `sidebar.panellist`(list) 两个 slot、侧栏入口与主题变量用法                                                                                                                |

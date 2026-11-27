@@ -270,35 +270,36 @@ window.__ModuleLoader__.load({
       memoryMode: ['summary', 'stream', 'tiered'].indexOf(d.memoryMode) >= 0 ? d.memoryMode : 'summary',
       homeEnabled: d.homeEnabled !== false,
       curateOnClose: d.curateOnClose !== false,
-      cabinWorldEnabled: d.cabinWorldEnabled !== false,
-      cabinWorldDataDir: typeof d.cabinWorldDataDir === 'string' ? d.cabinWorldDataDir : '',
+      room3dDir: typeof d.room3dDir === 'string' ? d.room3dDir : '',
+      room3dPort: Number.isInteger(d.room3dPort) ? d.room3dPort : 13100,
       petBridgeEnabled: d.petBridgeEnabled === true,
       petDir: typeof d.petDir === 'string' ? d.petDir : '',
     })
-    // v0.24.0 原版小屋世界桥状态：只读显示，1.5 秒刷新一次，不泄露 token。
-    function CabinWorldStatus() {
+    function Room3dStatus() {
       const [st, setSt] = React.useState(null)
       React.useEffect(() => {
         let alive = true
-        const load = () => fetch(resolveApiUrl('/api/companion-fishgirl/cabin-world'), { headers: { 'x-companion-settings': '1' } })
-          .then((r) => r.json()).then((d) => { if (alive) setSt(d) }).catch(() => { if (alive) setSt({ online: false, reason: '读取失败' }) })
+        const load = () => fetch(resolveApiUrl('/api/companion-fishgirl/room3d'), { headers: { 'x-companion-settings': '1' } })
+          .then((r) => r.json()).then((d) => { if (alive) setSt(d) }).catch(() => { if (alive) setSt({ online: false }) })
         load()
-        const t = setInterval(load, 1500)
+        const t = setInterval(load, 2000)
         return () => { alive = false; clearInterval(t) }
       }, [])
       const online = !!(st && st.online)
       const color = online ? '#5FB98A' : '#D96A5B'
       return h('div', { style: { display: 'flex', alignItems: 'center', gap: 8, padding: '6px 10px', margin: '2px 0 6px', borderRadius: 9, background: 'var(--dsw-alias-fill-tertiary,rgba(116,174,197,.08))', fontSize: 11.5 } },
         h('i', { style: { width: 8, height: 8, borderRadius: '50%', background: color, flex: 'none' } }),
-        h('span', null, online ? '小屋世界桥已就绪，可以用 cabin_* 工具了' : (st ? `桥未就绪：${st.reason || '请先启动游戏'}` : '正在检查小屋世界桥…')),
-        st && st.dataDir ? h('span', { style: { opacity: .6, marginLeft: 'auto' } }, String(st.dataDir).split(/[\\/]/).slice(-1)[0]) : null)
+        h('span', null, online ? '3D 小屋已就绪，浏览器打开 /room/ 即可进入' : (st ? '3D 小屋未启动：在设置卡点「启动 3D 小屋」或执行 npm start' : '正在检查 3D 小屋…')),
+        st && st.dir ? h('span', { style: { opacity: .6, marginLeft: 'auto' } }, String(st.dir)) : null)
     }
     function CompanionSettingsCard() {
       ensureCfgStyle()
       const [opts, setOpts] = React.useState(null)
       const [err, setErr] = React.useState('')
-      const [dirDraft, setDirDraft] = React.useState(null)
       const [petDirDraft, setPetDirDraft] = React.useState(null)
+      const [roomDirDraft, setRoomDirDraft] = React.useState(null)
+      const [roomPortDraft, setRoomPortDraft] = React.useState(null)
+      const [roomLaunch, setRoomLaunch] = React.useState(null)
       React.useEffect(() => {
         let alive = true
         settingsApi('GET').then((d) => { if (alive) setOpts(readOpts(d)) })
@@ -350,29 +351,61 @@ window.__ModuleLoader__.load({
             'aria-label': '记忆类型', value: opts ? opts.memoryMode : 'summary', disabled: !opts,
             style: selectStyle, onChange: (e) => save({ memoryMode: e.target.value }),
           }, MEMORY_MODES.map(m => h('option', { key: m.id, value: m.id }, m.label)))),
-        Row('cabinWorldEnabled', '原版小屋世界（GitHub cabin-world）',
-          '鱼鱼的小窝改为原版 Godot 游戏驱动：她有真实身体/零花钱/背包/日记，你自己用 cabin_* 工具安排生活。需先启动 CabinWorld 的 start.cmd。'),
-        h(CabinWorldStatus),
         h('div', { className: 'cfgs-row' },
           h('div', { className: 'cfgs-label' },
-            h('span', { className: 'cfgs-title' }, '小屋世界数据目录'),
-            h('span', { className: 'cfgs-desc' }, 'bridge.json 所在目录，默认 D:/CabinWorld/data。改完按回车或切走焦点保存；留空恢复默认。')),
-          h('input', {
-            'aria-label': '小屋世界数据目录', className: 'fh-input',
-            placeholder: 'D:/CabinWorld/data', disabled: !opts,
-            value: dirDraft !== null ? dirDraft : (opts ? (opts.cabinWorldDataDir || '') : ''),
-            style: { maxWidth: 210, fontSize: 12 },
-            onChange: (e) => setDirDraft(e.target.value),
-            onBlur: () => {
-              if (dirDraft === null) return
-              const v = dirDraft.trim()
-              setErr('')
-              settingsApi('POST', { cabinWorldDataDir: v }).then((d) => {
-                setOpts(readOpts(d)); setDirDraft(null)
-              }).catch((e) => { setErr(String(e && e.message || e)); setDirDraft(null) })
+            h('span', { className: 'cfgs-title' }, '小屋引擎'),
+            h('span', { className: 'cfgs-desc' }, '3D 海底小屋（feiyu-room-template）是唯一引擎；Godot 像素引擎已移除。Live2D 桌宠不受影响。')),
+          h('span', { className: 'cfgs-desc' }, '3D 小屋')),
+        h('div', null,
+          h(Room3dStatus),
+          h('div', { className: 'cfgs-row' },
+            h('div', { className: 'cfgs-label' },
+              h('span', { className: 'cfgs-title' }, '3D 小屋目录'),
+              h('span', { className: 'cfgs-desc' }, 'feiyu-room-template 解压目录（含 src/bridge.js 与 config.json），默认 D:/FeiyuRoom3D。改完回车或切走保存。')),
+            h('input', {
+              'aria-label': '3D 小屋目录', className: 'fh-input', placeholder: 'D:/FeiyuRoom3D', disabled: !opts,
+              value: roomDirDraft !== null ? roomDirDraft : (opts ? (opts.room3dDir || '') : ''),
+              style: { maxWidth: 210, fontSize: 12 },
+              onChange: (e) => setRoomDirDraft(e.target.value),
+              onBlur: () => {
+                if (roomDirDraft === null) return
+                const v = roomDirDraft.trim()
+                settingsApi('POST', { room3dDir: v }).then((d) => { setOpts(readOpts(d)); setRoomDirDraft(null) })
+                  .catch((e) => { setErr(String(e && e.message || e)); setRoomDirDraft(null) })
+              },
+              onKeyDown: (e) => { if (e.key === 'Enter') e.target.blur() },
+            })),
+          h('div', { className: 'cfgs-row' },
+            h('div', { className: 'cfgs-label' },
+              h('span', { className: 'cfgs-title' }, '3D 小屋端口'),
+              h('span', { className: 'cfgs-desc' }, '项目 consolePort，默认 13100；改这里要同步改项目 config.json。')),
+            h('input', {
+              'aria-label': '3D 小屋端口', className: 'fh-input', placeholder: '13100', disabled: !opts, type: 'number',
+              value: roomPortDraft !== null ? roomPortDraft : (opts ? String(opts.room3dPort || 13100) : '13100'),
+              style: { maxWidth: 100, fontSize: 12 },
+              onChange: (e) => setRoomPortDraft(e.target.value),
+              onBlur: () => {
+                if (roomPortDraft === null) return
+                const n = Number(roomPortDraft)
+                if (!Number.isInteger(n) || n <= 1024 || n >= 65536) { setErr('端口需在 1025-65535 之间'); setRoomPortDraft(null); return }
+                settingsApi('POST', { room3dPort: n }).then((d) => { setOpts(readOpts(d)); setRoomPortDraft(null) })
+                  .catch((e) => { setErr(String(e && e.message || e)); setRoomPortDraft(null) })
+              },
+              onKeyDown: (e) => { if (e.key === 'Enter') e.target.blur() },
+            })),
+          h('button', {
+            type: 'button', className: 'cfgs-btn', disabled: !opts,
+            onClick: () => {
+              setRoomLaunch('启动中…')
+              fetch(resolveApiUrl('/api/companion-fishgirl/room3d'), {
+                method: 'POST', headers: { 'content-type': 'application/json', 'x-companion-settings': '1' },
+                body: JSON.stringify({ action: 'launch' }),
+              }).then((r) => r.json()).then((d) => { setRoomLaunch(d.ok ? '已启动，打开 /room/ 即可' : ('启动失败：' + (d.error || '未知'))) })
+                .catch((e) => setRoomLaunch('启动失败：' + String(e && e.message || e)))
             },
-            onKeyDown: (e) => { if (e.key === 'Enter') e.target.blur() },
-          })),
+          }, '启动 3D 小屋'),
+          roomLaunch ? h('div', { className: 'cfgs-desc', style: { margin: '4px 0' } }, roomLaunch) : null,
+        ),
         Row('curateOnClose', '会话整理',
           '窗口关闭后，下扇窗口打开时让大肥鱼自己挑选值得长期记住的内容。'),
         Group('桌面形象'),
@@ -381,7 +414,7 @@ window.__ModuleLoader__.load({
         h('div', { className: 'cfgs-row' },
           h('div', { className: 'cfgs-label' },
             h('span', { className: 'cfgs-title' }, '桌宠安装目录'),
-            h('span', { className: 'cfgs-desc' }, '含桌宠宿主与模型配置的 pet 文件夹。留空自动探测（优先用本插件自带的 webview2 版本）；改完按回车或切走焦点保存。')),
+            h('span', { className: 'cfgs-desc' }, '含 main.js / Electron 的 pet 文件夹。留空自动探测（会优先用已装 Electron 和模型的那份）；改完按回车或切走焦点保存。')),
           h('input', {
             'aria-label': '桌宠安装目录', className: 'fh-input',
             placeholder: '留空自动探测', disabled: !opts,
@@ -1857,8 +1890,12 @@ window.__ModuleLoader__.load({
           .catch(e => { setMsg(String(e && e.message || e)); void loadLaunch() })
           .finally(() => setLaunchBusy(false))
       }
+      const [room3d, setRoom3d] = React.useState(null)
+      const loadRoom3d = React.useCallback(() => fetch(resolveApiUrl('/api/companion-fishgirl/room3d'), { headers: { 'x-companion-settings': '1' } })
+        .then((r) => r.json()).then(setRoom3d).catch(() => setRoom3d({ online: false })), [])
       useEffect(() => {
         if (tab === 'pet') { void petRefresh(); void petLoadCatalog(); void petLoadEvents(); void loadLaunch() }
+        if (tab === 'room3d') void loadRoom3d()
       }, [tab])
       useEffect(() => {
         void loadPresence()
@@ -1917,7 +1954,7 @@ window.__ModuleLoader__.load({
       const title = (text, right) => h('div', { className: 'fh-panel-title' },
         h('span', null, text),
         right ? h('span', { style: { fontWeight: 400, opacity: .65 } }, right) : null)
-      const tabs = [['daily', '此刻'], ['garden', '院子'], ['gallery', '画册'], ['star', '星图'], ['pet', 'Live2D 桌宠']]
+      const tabs = [['daily', '此刻'], ['garden', '院子'], ['gallery', '画册'], ['star', '星图'], ['room3d', '3D 小屋'], ['pet', 'Live2D 桌宠']]
 
       const currentView = h(React.Fragment, null,
 
@@ -2000,16 +2037,36 @@ window.__ModuleLoader__.load({
         : null,
 
         // ── Live2D 桌宠桥接（v0.21：真实表情/动作目录 + 事件流）──
+        tab === 'room3d' ? h('div', { style: { display: 'flex', flexDirection: 'column', gap: 10 } },
+          h('div', { className: 'fh-panel', style: { borderColor: 'rgba(127,119,221,.5)' } },
+            title('3D 海底小屋', room3d ? (room3d.online ? '服务已就绪' : '未启动') : '检测中'),
+            h('div', { className: 'fh-msg' }, room3d && room3d.online
+              ? '3D 小屋已经跑起来了，展开下面的房间就能看到她。菜园、走动、摸头都由 room3d_* 工具驱动，和浏览器里是同一只鱼。'
+              : '3D 小屋独立运行，不依赖 Live2D 桌宠。点「启动 3D 小屋」后浏览器会打开房间页面。'),
+            h('div', { className: 'fh-chips', style: { marginTop: 8 } },
+              chip('启动 3D 小屋', () => {
+                setRoom3d(Object.assign({}, room3d, { launching: true }))
+                fetch(resolveApiUrl('/api/companion-fishgirl/room3d'), {
+                  method: 'POST', headers: { 'content-type': 'application/json', 'x-companion-settings': '1' },
+                  body: JSON.stringify({ action: 'launch' }),
+                }).then((r) => r.json()).then((d) => {
+                  if (d.ok && d.url) window.open(d.url, '_blank', 'noopener')
+                  void loadRoom3d()
+                }).catch(() => void loadRoom3d())
+              }, !!(room3d && room3d.launching)),
+              chip('打开房间', () => { if (room3d && room3d.url) window.open(room3d.url, '_blank', 'noopener') }, !(room3d && room3d.online)),
+              chip('刷新状态', () => void loadRoom3d())),
+            room3d && room3d.url ? h('div', { className: 'fh-msg', style: { marginTop: 6, opacity: .7, wordBreak: 'break-all' } }, room3d.url) : null)) : null,
         tab === 'pet' ? h('div', { style: { display: 'flex', flexDirection: 'column', gap: 10 } },
           h('div', { className: 'fh-panel', style: { borderColor: 'rgba(91,127,212,.5)' } },
             title('启动 Live2D 桌宠', launchInfo ? (launchInfo.running ? '运行中' : launchInfo.installed ? ('可启动 · ' + (launchInfo.installName || '自动探测')) : '需安装') : '检测中'),
-            h('div', { className: 'fh-msg' }, launchInfo && launchInfo.message ? launchInfo.message : '正在检测系统 WebView2 桌宠状态…'),
+            h('div', { className: 'fh-msg' }, launchInfo && launchInfo.message ? launchInfo.message : '正在检测 Electron 与桌宠状态…'),
             h('div', { className: 'fh-chips', style: { marginTop: 8 } },
-              chip(launchInfo && launchInfo.running ? '已在运行 · 刷新' : '🚀 启动桌宠',
+              chip(launchInfo && launchInfo.running ? '已在运行 · 刷新' : '🚀 启动 Electron 桌宠',
                 () => { if (launchInfo && launchInfo.running) { void petRefresh(); void loadLaunch() } else { void launchPet('launch') } },
                 launchBusy),
               chip('刷新状态', () => { void loadLaunch(); void petRefresh() }, launchBusy),
-              launchInfo && launchInfo.installed === false && launchInfo.engine !== 'webview2' ? chip('安装 Electron', () => void launchPet('install'), launchBusy) : null)),
+              launchInfo && launchInfo.installed === false ? chip('安装 Electron', () => void launchPet('install'), launchBusy) : null)),
           h('div', { className: 'fh-pet-hero' },
             h('div', { className: 'fh-pet-orb', 'data-on': pet && pet.connected ? 'true' : 'false' }, '🐟'),
             h('div', null,
@@ -2071,8 +2128,8 @@ window.__ModuleLoader__.load({
                 h('span', { className: 'fh-feed-x' }, label))
             }))) : null,
           h('div', { className: 'fh-sub', style: { lineHeight: 1.6, padding: '0 2px' } },
-            '桌宠加载你本机解压的大肥鱼 Live2D 模型，默认用 Windows 系统自带的 WebView2 显示（无外接游戏引擎、无需 Electron），直接点上方「启动桌宠」即可。'
-            + '拖动窗口顶部移动，F9 切换鼠标穿透，Ctrl+Shift+Q 退出；启动后会自动打开桥接，也可在设置卡里手动开关「Live2D 桌宠桥接」。'
+            '桌宠是独立程序（pet/ 目录），加载你本机解压的大肥鱼 Live2D 模型；直接点上方的「启动 Electron 桌宠」即可，无需再去文件管理器双击。'
+            + '首次使用若提示未安装 Electron，点「安装 Electron」等待完成再启动；启动后会自动打开桥接，也可以在插件设置卡里手动开关「Live2D 桌宠桥接」。'
             + '模型版权与署名见 README。面板里的像素小屋不依赖桌宠，随时可用。'))
         : null,
 

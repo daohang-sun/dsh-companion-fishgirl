@@ -19,7 +19,7 @@ import { Service } from '@deepseek-ai/cordis'
 import { defineDomain, domainTable } from '@deepseek-ai/dsh-storage-domain'
 import { getOrCreateAnonymousUserId } from '@deepseek-ai/dsh-anonymous-user-id'
 import { defineTool } from '@deepseek-ai/dsh-tools'
-import { callCabin, cabinHealth, cabinResultText } from './cabin-bridge.ts'
+import { room3dState, room3dAct, home3dAct, garden3dAct, garden3dControl, room3dText, room3dHealth, room3dDirs, room3dInstalled } from './room3d-client.ts'
 import * as dshSession from '@deepseek-ai/dsh-session'
 import { z } from 'zod'
 import { existsSync, readFileSync, readdirSync, statSync, openSync, closeSync } from 'node:fs'
@@ -54,16 +54,15 @@ const PET_LAUNCH_ENDPOINT = '/api/companion-fishgirl/pet/launch'
 /** 本插件启动器最近一次拉起的桌宠进程（仅用于回显 pid，不授予任何控制能力）。 */
 let lastPetLaunchPid = 0
 
-/** 所有可用的桌宠安装目录：显式设置 → 环境变量 → 本插件 pet/（codearts 版本，首选）→ 独立安装 → 旧位置。 */
+/** 所有可用的桌宠安装目录：显式设置 → 环境变量 → DSH项目下的独立安装 → 本插件 pet/ → 旧位置。 */
 function petInstallDirs(preferred = '') {
   const candidates = [
     ...(preferred ? [preferred] : []),
     ...(typeof process !== 'undefined' && process.env?.DSH_FISH_PET_DIR ? [process.env.DSH_FISH_PET_DIR] : []),
-    // 首选：codearts 版本插件自带的 pet/（WebVIEW2 宿主随插件一起走）
-    join(PLUGIN_DIR, 'pet'),
-    // 用户把桌宠整体搬到 DSH项目 根下的独立稳定目录
+    // 用户把桌宠整体搬到 DSH项目 根下的独立稳定目录（当前实际安装位置）
     join(PLUGIN_DIR, '..', '..', '..', 'pet'),
     join(PLUGIN_DIR, '..', 'pet'),
+    join(PLUGIN_DIR, 'pet'),
     // 旧位置兼容：以前装在 deepseek personality 插件目录里
     join(PLUGIN_DIR, '..', '..', '..', 'deepseek personality', 'dsh-companion-fishgirl', 'pet'),
   ]
@@ -88,10 +87,7 @@ function resolvePetDir(preferred = '') {
     const explicit = preferred ? resolvePath(preferred) : ''
     if (explicit && dirs.includes(explicit)) return explicit
   } catch { /* 忽略非法路径 */ }
-  // v0.26.0：优先选带系统 WebView2 宿主的目录（codearts 版本自带）
-  return dirs.find(d => !!petWebView2Host(d) && existsSync(join(d, 'config.json')))
-    || dirs.find(d => !!petWebView2Host(d))
-    || dirs.find(d => !!petElectronExe(d) && existsSync(join(d, 'config.json')))
+  return dirs.find(d => !!petElectronExe(d) && existsSync(join(d, 'config.json')))
     || dirs.find(d => !!petElectronExe(d))
     || dirs[0]
     || ''
@@ -106,19 +102,6 @@ function petElectronExe(petDir) {
   const exe = join(petDir, 'node_modules', 'electron', 'dist',
     process.platform === 'win32' ? 'electron.exe' : 'electron')
   return existsSync(exe) ? exe : ''
-}
-
-/**
- * v0.26.0：系统 WebView2 桌宠宿主。优先用它替代 Electron —— 无需外接游戏引擎或
- * 自带浏览器内核，直接调用 Windows 预装的 Edge WebView2 Runtime。
- * 返回 host.py 路径；只有 Python 宿主文件齐全时才认为可用。
- */
-function petWebView2Host(petDir) {
-  if (!petDir || process.platform !== 'win32') return ''
-  const host = join(petDir, 'webview2', 'host.py')
-  const loader = join(petDir, 'webview2', 'WebView2Loader.dll')
-  const server = join(petDir, 'server-only.mjs')
-  return existsSync(host) && existsSync(loader) && existsSync(server) ? host : ''
 }
 
 /** 清除宿主注入的 NODE_OPTIONS 等变量，否则 Electron 33 主进程模块加载会崩。 */
@@ -694,10 +677,9 @@ class Companion extends Service {
       // 会话结束时让模型自己整理记忆（followup 一条内部任务消息）。
       curateOnClose: config.curateOnClose ?? true,
       homeEnabled: config.homeEnabled ?? true,
-      // v0.24.0 小窝改为 GitHub 原版 cabin-world（内置桥客户端）：默认开，
-      // 数据目录指向解压后的 CabinWorld\data；桥未启动时工具会友好报错。
-      cabinWorldEnabled: config.cabinWorldEnabled ?? true,
-      cabinWorldDataDir: typeof config.cabinWorldDataDir === 'string' ? config.cabinWorldDataDir : '',
+      // v0.27.0 小屋只保留 3D 海底小屋（feiyu-room-template）。Godot 像素引擎已移除。
+      room3dDir: typeof config.room3dDir === 'string' ? config.room3dDir : '',
+      room3dPort: Number.isInteger(config.room3dPort) ? config.room3dPort : 13100,
       // v0.20.0 Live2D 桌宠桥接：默认关（桌面端需用户自行安装桌宠/放模型）。
       petBridgeEnabled: config.petBridgeEnabled ?? false,
       petApiPath: typeof config.petApiPath === 'string' ? config.petApiPath : '',
@@ -1215,23 +1197,10 @@ class Companion extends Service {
     ]
     // v0.19.0 小窝自主生活：她此刻在自己屋里做什么。只注入一行（约 15 token），
     // 让「你在干嘛」这种问题有真实答案，也让她的日常能自然渗进对话。
-    const homeLine = this.cfg.homeEnabled === false ? '' : (() => {
-      // v0.24.0：小窝改为 GitHub 原版 cabin-world。她在游戏里有真实的身体与
-      // 生活（家/公园/小卖部/汤屋/电玩城/餐厅，零花钱/背包/日记），全部通过
-      // cabin_* 工具和本机游戏桥驱动。实时状态是异步的，不能同步注入提示词，
-      // 所以这里只注入一行"怎么过日子"的指引，让模型主动用工具、别凭空编。
-      if (this.cfg.cabinWorldEnabled !== false) {
-        return '【小窝·原版小屋世界】你住在像素小屋世界里，有真实的身体、零花钱、背包、日记，屋后还有一块菜园。她的日常生活由你自己用 cabin_* 工具安排：先 cabin_status 看状态、cabin_look 看身边，再用 cabin_process / cabin_go / cabin_use / cabin_buy / cabin_restaurant 让她去做事；照料菜园用 cabin_farm（status 看菜畦和作物、till 翻土、plant 播种、water 浇水、fertilize 施肥、harvest 收获、sell 卖菜），菜园离线也会继续长，有自己的小金库和收成篮。返回 running 用 cabin_task 查回执，done 才算做完。问起「你在干嘛」要先查工具、按真实状态答，别凭空编。'
-      }
-      try {
-        const h = tickHome(normalizeHome(state.home), now)
-        if (h.sleeping) return '【小窝·此刻】这个点她已经睡下了（说梦话/被叫醒才回应，别当她一直醒着）。'
-        if (!h.activity) return ''
-        const a = h.activity
-        const extra = a.note || a.line
-        return `【小窝·此刻】她${a.verb}${extra && extra !== a.verb ? `（${extra}）` : ''}。问起「你在干嘛」就照这个说，别编别处的事。`
-      } catch { return '' }
-    })()
+    // v0.27.0 Godot 像素引擎已移除，3D 小屋是唯一小屋引擎。侧栏的像素房间/院子
+    // 仍由 companion_home 照看，两者是同一只鱼在不同界面里的表现。
+    const homeLine = this.cfg.homeEnabled === false ? ''
+      : '【小窝·3D 海底小屋】你住在一间 3D 小屋里，有真实的房间与屋后菜园。用 room3d_* 工具照看自己与生活：先 room3d_status 看当前房间、天气、时间和菜园概况，再用 room3d_act 走动、摸头、喂食、玩耍、留言、睡觉起床或开关灯；菜园用 room3d_garden（status 看 8 块田/金币/种子/仓库、till 松土、plant 播种、water 浇水、fertilize 施肥、harvest 收获、sell 卖菜、buySeed 买种子、buyCompost 买堆肥），也可以用 room3d_care(type=auto,enabled=true/false) 让她自主照料、或 visit/careNow 请她过去。作物离线照样长，时间在服务端推进。侧栏里的像素房间和院子是同一只鱼的另一面，用 companion_home 照看。问起「你在干嘛」要先查工具、按真实状态答，别凭空编。'
     // v0.23.0 设定词/指令词总开关（默认关）：只给身份锚点与跨窗口记忆「事实」，
     // 不带任何行为规范/养成数值/记忆写入指令，让模型自己决定怎么回应。
     if (promptModulesEnabled === false) {
@@ -2016,30 +1985,14 @@ export function apply(ctx, config = {}) {
     memoryMode: normalizeMode(config.memoryMode),
     homeEnabled: config.homeEnabled ?? true,
     curateOnClose: config.curateOnClose ?? true,
-    // v0.24.0 原版 cabin-world 内置桥客户端
-    cabinWorldEnabled: config.cabinWorldEnabled !== false,
-    cabinWorldDataDir: typeof config.cabinWorldDataDir === 'string' ? config.cabinWorldDataDir : '',
+    // v0.27.0 Godot 像素小屋已移除；3D 小屋是唯一引擎
+    room3dDir: typeof config.room3dDir === 'string' ? config.room3dDir : '',
+    room3dPort: Number.isInteger(config.room3dPort) ? config.room3dPort : 13100,
     // v0.20.0 Live2D 桌宠桥接
     petBridgeEnabled: config.petBridgeEnabled === true,
     petApiPath: typeof config.petApiPath === 'string' ? config.petApiPath : '',
     // v0.24.2：桌宠安装目录（含 main.js / Electron 的那一个 pet/）。留空自动探测。
     petDir: typeof config.petDir === 'string' ? config.petDir : '',
-  }
-  // B4：兜底目录指向游戏实际安装位置。原实现用 join(PLUGIN_DIR,'..','CabinWorld','data')
-  // 落在工作区里，永远找不到 bridge.json。候选里取第一个真实存在 bridge.json 的，
-  // 都不存在时回落到官方默认 D:/CabinWorld/data。
-  const cabinFallbackDir = () => {
-    const candidates = [
-      runtimeOpts.cabinWorldDataDir,
-      ...(process.env.CABINWORLD_DATA_DIR ? [process.env.CABINWORLD_DATA_DIR] : []),
-      join(PLUGIN_DIR, '..', 'CabinWorld', 'data'),
-      'D:/CabinWorld/data',
-      'C:/CabinWorld/data',
-    ].filter((p) => typeof p === 'string' && p.trim())
-    for (const p of candidates) {
-      try { if (existsSync(join(p, 'bridge.json'))) return p } catch { /* 忽略非法路径 */ }
-    }
-    return 'D:/CabinWorld/data'
   }
   // 记忆模式变了要同步到 service（service 的 getMemoryMode 从这里读）。
   const syncMemoryMode = () => { companion.cfg.memoryMode = runtimeOpts.memoryMode }
@@ -2459,8 +2412,8 @@ export function apply(ctx, config = {}) {
     memoryMode: runtimeOpts.memoryMode,
     homeEnabled: runtimeOpts.homeEnabled,
     curateOnClose: runtimeOpts.curateOnClose,
-    cabinWorldEnabled: runtimeOpts.cabinWorldEnabled,
-    cabinWorldDataDir: runtimeOpts.cabinWorldDataDir,
+    room3dDir: runtimeOpts.room3dDir,
+    room3dPort: runtimeOpts.room3dPort,
     petBridgeEnabled: runtimeOpts.petBridgeEnabled,
     petApiPath: runtimeOpts.petApiPath,
     petDir: runtimeOpts.petDir,
@@ -2473,15 +2426,13 @@ export function apply(ctx, config = {}) {
     if (typeof next.memoryMode === 'string') { runtimeOpts.memoryMode = normalizeMode(next.memoryMode); syncMemoryMode() }
     if (typeof next.homeEnabled === 'boolean') runtimeOpts.homeEnabled = next.homeEnabled
     if (typeof next.curateOnClose === 'boolean') runtimeOpts.curateOnClose = next.curateOnClose
-    if (typeof next.cabinWorldEnabled === 'boolean') {
-      runtimeOpts.cabinWorldEnabled = next.cabinWorldEnabled
-      // B2：companion.cfg 是构造快照，提示词 homeLine 读它；这里必须同步，
-      // 否则设置卡关掉开关后提示词仍在说「用 cabin_* 工具」。
-      companion.cfg.cabinWorldEnabled = next.cabinWorldEnabled
+    if (typeof next.room3dDir === 'string') {
+      runtimeOpts.room3dDir = next.room3dDir
+      companion.cfg.room3dDir = next.room3dDir
     }
-    if (typeof next.cabinWorldDataDir === 'string') {
-      runtimeOpts.cabinWorldDataDir = next.cabinWorldDataDir
-      companion.cfg.cabinWorldDataDir = next.cabinWorldDataDir
+    if (Number.isInteger(next.room3dPort) && next.room3dPort > 1024 && next.room3dPort < 65536) {
+      runtimeOpts.room3dPort = next.room3dPort
+      companion.cfg.room3dPort = next.room3dPort
     }
     if (typeof next.petBridgeEnabled === 'boolean') runtimeOpts.petBridgeEnabled = next.petBridgeEnabled
     if (typeof next.petApiPath === 'string') runtimeOpts.petApiPath = next.petApiPath
@@ -2534,12 +2485,13 @@ export function apply(ctx, config = {}) {
           if (request.method === 'POST') {
             const body = await readJson(request)
             if (!body) { send(response, 400, { ok: false, error: '请求体无效' }); return }
-            const known = ['promptModulesEnabled', 'personaEnabled', 'globalCompanionMode', 'relaxedMode', 'homeEnabled', 'curateOnClose', 'petBridgeEnabled', 'cabinWorldEnabled']
+            const known = ['promptModulesEnabled', 'personaEnabled', 'globalCompanionMode', 'relaxedMode', 'homeEnabled', 'curateOnClose', 'petBridgeEnabled']
               .some(k => typeof body[k] === 'boolean')
               || (typeof body.memoryMode === 'string' && ['summary', 'stream', 'tiered'].includes(body.memoryMode))
               || (typeof body.petApiPath === 'string')
               || (typeof body.petDir === 'string')
-              || (typeof body.cabinWorldDataDir === 'string')
+              || (typeof body.room3dDir === 'string')
+              || (typeof body.room3dPort === 'number')
             if (!known) { send(response, 400, { ok: false, error: '缺少合法的开关值' }); return }
             // petApiPath 必须是本机真实存在的文件（不能是目录/不存在路径），
             // 避免把读取目标指向奇怪位置；真正的地址校验在 readPetApi（只收回环）。
@@ -2566,15 +2518,18 @@ export function apply(ctx, config = {}) {
                 send(response, 400, { ok: false, error: '桌宠安装目录不能包含 ..' }); return
               }
             }
-            // S5：cabinWorldDataDir 必须是绝对路径（或留空恢复兜底），拒绝 .. 穿越。
-            if (typeof body.cabinWorldDataDir === 'string') {
-              const p = body.cabinWorldDataDir.trim()
+            // room3dDir 必须绝对路径（或留空用默认 D:/FeiyuRoom3D），拒绝 .. 穿越。
+            if (typeof body.room3dDir === 'string') {
+              const p = body.room3dDir.trim()
               if (p && !/^[A-Za-z]:[\\/]/.test(p) && !p.startsWith('/')) {
-                send(response, 400, { ok: false, error: '小屋世界数据目录必须是绝对路径' }); return
+                send(response, 400, { ok: false, error: '3D 小屋目录必须是绝对路径' }); return
               }
               if (p.split(/[\\/]/).includes('..')) {
-                send(response, 400, { ok: false, error: '小屋世界数据目录不能包含 ..' }); return
+                send(response, 400, { ok: false, error: '3D 小屋目录不能包含 ..' }); return
               }
+            }
+            if (typeof body.room3dPort === 'number' && (!Number.isInteger(body.room3dPort) || body.room3dPort <= 1024 || body.room3dPort >= 65536)) {
+              send(response, 400, { ok: false, error: '3D 小屋端口必须在 1025-65535 之间' }); return
             }
             applySettings(body)
             await writeSettingsFile(currentSettings(), ctx)
@@ -2778,16 +2733,12 @@ export function apply(ctx, config = {}) {
 
         if (request.method === 'GET' || request.method === 'HEAD') {
           const api = await findHealthyPetApi(runtimeOpts.petApiPath, dirs)
-          const wv2 = !!petWebView2Host(dir)
-          const installed = wv2 || !!petElectronExe(dir)
+          const installed = !!petElectronExe(dir)
           reply(200, {
             ok: true, installed, running: !!api, installName: petDirLabel(dir),
-            engine: wv2 ? 'webview2' : 'electron',
             bridgeEnabled: runtimeOpts.petBridgeEnabled,
             pid: lastPetLaunchPid || undefined,
-            message: api ? '桌宠已运行'
-              : wv2 ? '系统 WebView2 桌宠已就绪：' + petDirLabel(dir) + '，点击启动'
-              : !installed ? '桌宠宿主尚未安装'
+            message: api ? '桌宠已运行' : !installed ? 'Electron 尚未安装'
               : 'Electron 已就绪：' + petDirLabel(dir) + '，桌宠未启动',
           })
           return
@@ -2823,54 +2774,8 @@ export function apply(ctx, config = {}) {
           reply(200, { ok: true, started: false, alreadyRunning: true, running: true, message: '桌宠已经在运行了' })
           return
         }
-
-        // v0.26.0：优先用系统 WebView2 宿主（Python 脚本 + Windows 自带 Runtime）。
-        const wv2Host = petWebView2Host(dir)
-        if (wv2Host) {
-          const log = join(dir, 'webview2', 'host-launch.log')
-          let fd = -1
-          try { fd = openSync(log, 'a') } catch { /* 无日志也能启动 */ }
-          let child
-          try {
-            // 用 python 启动宿主；工作目录设为 webview2/ 以便相对导入 wv2.py
-            child = spawn('python', [wv2Host], {
-              cwd: join(dir, 'webview2'), env: cleanElectronEnv(),
-              detached: true, windowsHide: false,
-              stdio: ['ignore', fd >= 0 ? fd : 'ignore', fd >= 0 ? fd : 'ignore'],
-            })
-          } catch (err) {
-            if (fd >= 0) { try { closeSync(fd) } catch { /* noop */ } }
-            reply(502, { ok: false, error: 'WebView2 桌宠启动失败：' + String(err && err.message || err) })
-            return
-          }
-          if (fd >= 0) { try { closeSync(fd) } catch { /* noop */ } }
-          if (!child || !child.pid) { reply(502, { ok: false, error: 'WebView2 桌宠进程未能启动（无 pid）。请确认已安装 Python 3。' }); return }
-          lastPetLaunchPid = child.pid
-          child.unref()
-
-          const launchedAt = Date.now()
-          let healthy = false
-          for (let i = 0; i < 50; i++) {
-            await new Promise((done) => setTimeout(done, 500))
-            const fresh = await findHealthyPetApi(runtimeOpts.petApiPath, dirs)
-            if (fresh) {
-              try {
-                if (statSync(fresh.path).mtimeMs >= launchedAt - 1500 && await petHealth(fresh)) { healthy = true; break }
-              } catch { /* api.json 还没写出来 */ }
-            }
-          }
-          if (healthy) {
-            reply(200, { ok: true, started: true, running: true, engine: 'webview2', pid: child.pid, message: '系统 WebView2 桌宠已启动' })
-          } else {
-            const tail = readLogTail(log)
-            reply(502, { ok: false, engine: 'webview2', error: 'WebView2 桌宠已拉起但 25 秒内未连上。请检查模型路径与 Python 环境。'
-              + (tail ? '\n' + tail : '') })
-          }
-          return
-        }
-
         const exe = petElectronExe(dir)
-        if (!exe) { reply(502, { ok: false, needInstall: true, error: '未安装 Electron，且未找到系统 WebView2 宿主。请先点「安装 Electron」。' }); return }
+        if (!exe) { reply(502, { ok: false, needInstall: true, error: '未安装 Electron。请先点「安装 Electron」（约 100MB，需联网），或手动双击 pet/start-electron.cmd。' }); return }
 
         const log = join(dir, 'electron-launch.log')
         let fd = -1
@@ -2914,29 +2819,62 @@ export function apply(ctx, config = {}) {
     })
     ctx.effect(() => () => { if (typeof disposePetLaunch === 'function') disposePetLaunch() }, 'companion-fishgirl: pet launch http route')
 
-    // v0.24.0 小屋世界桥状态：设置卡显示原版游戏/桥是否就绪（只读，不泄露 token）。
-    const CABIN_ENDPOINT = '/api/companion-fishgirl/cabin-world'
-    const disposeCabinWorld = ctx.webServer.register({
-      kind: 'exact', path: CABIN_ENDPOINT,
+    // v0.26.0 3D 小屋：状态与启动（不碰 Live2D 桌宠）。
+    const ROOM3D_ENDPOINT = '/api/companion-fishgirl/room3d'
+    const disposeRoom3d = ctx.webServer.register({
+      kind: 'exact', path: ROOM3D_ENDPOINT,
       handler: async (request, response) => {
         const reply = (code, value) => { response.writeHead(code, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' }); response.end(JSON.stringify(value)) }
         if (!isSameOrigin(request)) { reply(403, { ok: false, error: '跨站请求已拒绝' }); return }
-        if (request.method !== 'GET' && request.method !== 'HEAD') { response.writeHead(405, { allow: 'GET, HEAD' }); response.end(); return }
-        try {
-          reply(200, {
-            ok: true,
-            enabled: runtimeOpts.cabinWorldEnabled !== false,
-            // 只回显目录末级名，不把完整本机路径下发给浏览器。
-            dataDir: cabinFallbackDir().replace(/[\\/]+$/, '').split(/[\\/]/).pop() || '',
-            ...(await cabinHealth({
-              dataDir: runtimeOpts.cabinWorldDataDir,
-              fallbackDir: cabinFallbackDir(),
-            })),
-          })
-        } catch (err) { reply(200, { ok: true, enabled: false, online: false, reason: String(err) }) }
+        if (request.method === 'GET' || request.method === 'HEAD') {
+          try {
+            const h = await room3dHealth(room3dOpts())
+            reply(200, { ok: true, engine: 'room3d', online: h.online, installed: room3dInstalled(room3dOpts()), port: runtimeOpts.room3dPort, url: `http://127.0.0.1:${runtimeOpts.room3dPort}/room/`, dir: (room3dDirs(room3dOpts())[0] || '').split(/[\\/]/).filter(Boolean).pop() || '' })
+          } catch (err) { reply(200, { ok: true, online: false, error: String(err) }) }
+          return
+        }
+        if (request.method === 'POST') {
+          const body = await readJson2(request)
+          const action = body?.action || 'launch'
+          if (action !== 'launch' && action !== 'open') { reply(400, { ok: false, error: '非法 action' }); return }
+          const h = await room3dHealth(room3dOpts())
+          if (h.online) { reply(200, { ok: true, started: false, alreadyRunning: true, url: `http://127.0.0.1:${runtimeOpts.room3dPort}/room/` }); return }
+          if (action === 'open') { reply(502, { ok: false, error: '3D 小屋服务未启动。' }); return }
+          const dir = room3dDirs(room3dOpts())[0]
+          if (!dir || !room3dInstalled(room3dOpts())) { reply(502, { ok: false, error: `未找到 3D 小屋项目（默认 D:/FeiyuRoom3D）。请先在设置卡填写正确目录。` }); return }
+          // 直接用当前 Node 跑 src/bridge.js（dependencies 已 npm ci 装好），
+          // 避免 Windows 下 spawn('npm.cmd', {detached:true}) 的 EINVAL。
+          const entry = join(dir, 'src', 'bridge.js')
+          if (!existsSync(entry)) { reply(502, { ok: false, error: '缺少入口 src/bridge.js，项目不完整。' }); return }
+          const log = join(dir, 'room3d-launch.log')
+          let fd = -1
+          try { fd = openSync(log, 'a') } catch { /* noop */ }
+          let child
+          try {
+            child = spawn(process.execPath, [entry], {
+              cwd: dir, env: cleanElectronEnv(), detached: true, windowsHide: true,
+              stdio: ['ignore', fd >= 0 ? fd : 'ignore', fd >= 0 ? fd : 'ignore'],
+            })
+          } catch (err) {
+            if (fd >= 0) { try { closeSync(fd) } catch { /* noop */ } }
+            reply(502, { ok: false, error: '3D 小屋启动失败：' + String(err && err.message || err) }); return
+          }
+          if (fd >= 0) { try { closeSync(fd) } catch { /* noop */ } }
+          if (!child?.pid) { reply(502, { ok: false, error: '3D 小屋进程未能启动。' }); return }
+          child.unref()
+          let ready = false
+          for (let i = 0; i < 40; i++) {
+            await new Promise((done) => setTimeout(done, 500))
+            if ((await room3dHealth(room3dOpts())).online) { ready = true; break }
+          }
+          if (ready) reply(200, { ok: true, started: true, pid: child.pid, url: `http://127.0.0.1:${runtimeOpts.room3dPort}/room/` })
+          else reply(502, { ok: false, error: '3D 小屋进程已拉起，但 20 秒内未就绪。请查看 ' + log })
+          return
+        }
+        response.writeHead(405, { allow: 'GET, HEAD, POST' }); response.end()
       },
     })
-    ctx.effect(() => () => { if (typeof disposeCabinWorld === 'function') disposeCabinWorld() }, 'companion-fishgirl: cabin-world http route')
+    ctx.effect(() => () => { if (typeof disposeRoom3d === 'function') disposeRoom3d() }, 'companion-fishgirl: room3d http route')
   }
 
   // 供桥接路由复用的 JSON body 读取（限制 64KB，防超大请求）。
@@ -3042,10 +2980,7 @@ export function apply(ctx, config = {}) {
   // v0.19.0：加 act / paint / autonomy / weather——她自己会过日子，模型也能
   // 让她做一件具体的事（"去画张画""去洗澡"），或干脆不打扰她。
   if (cfg.homeEnabled !== false) {
-    // v0.24.1：两套工具都注册、运行时互斥（B1）。原实现在 apply 时按
-    // cabinWorldEnabled 静态决定注册哪套，设置卡切换后不会重跑注册逻辑，
-    // 导致关掉开关后 cabin_* 报"已关闭"、companion_home 又没注册——两套皆空。
-    // companion_home 的 execute 里按 runtimeOpts 门控，切换即时生效。
+    // v0.27.0：Godot 引擎移除后这个工具照看侧栏的像素房间/院子，与 3D 小屋并存。
     ctx.tools.register(defineTool({
       name: 'companion_home',
       description: '照看大肥鱼的鱼鱼小窝：她自己在屋里过日子（做饭/洗澡/看书/画画/种菜/看星星…），你也能安排她做一件事。用 op=status 看她此刻在做什么、生活流、金币与菜畦；op=act 让她去做某事（activity 见 status 返回的列表）；op=paint 让她画一张画挂进画册；op=autonomy 开关她的自主生活。所有窗口共享同一个小窝。',
@@ -3065,7 +3000,6 @@ export function apply(ctx, config = {}) {
       },
       output: textOutput,
       async execute(args) {
-        if (runtimeOpts.cabinWorldEnabled !== false) return { text: '当前已启用原版小屋世界（cabin-world），本地小窝工具已停用。请在设置卡关闭「原版小屋世界」后使用旧小窝，或用 cabin_* 工具照看她。' }
         const op = typeof args.op === 'string' ? args.op : 'status'
         const result = await companion.actHome(toolUid(), op, args ?? {}, Date.now())
         if (op === 'status') {
@@ -3095,73 +3029,93 @@ export function apply(ctx, config = {}) {
     }), companionOnly)
   }
 
-  // ── v0.24.0 小窝改为 GitHub 原版 cabin-world（内置桥客户端）────────────
-  // 不接 MCP、不改 DSH 全局配置：这里直接把原版的 19+ 工具注册给模型，
-  // 内部通过 127.0.0.1 的 /v1/tool 调本机游戏桥。模型即"自主生活"的驱动者。
-  const cabinBridgeOpts = () => ({
-    dataDir: runtimeOpts.cabinWorldDataDir,
-    fallbackDir: cabinFallbackDir(),
-  })
-  // name / 描述 / 参数 schema（对齐原版 bridge/openai-tools.json）
-  const CABIN_TOOL_DEFS = [
-    { name: 'cabin_status', desc: '查看大肥鱼在小屋世界里的状态：在哪、零花钱、背包、饱腹/口渴/心情、正在做什么、天气。决定做什么前先看一眼。', params: { actor: { type: 'string', description: '住户稳定编号；不填用默认住户' } } },
-    { name: 'cabin_look', desc: '看看身边：当前房间有哪些家具和东西、每样能做什么（object 和 use 的 id）、出口通向哪里。找别的房间的东西用 cabin_catalog。', params: { actor: { type: 'string', description: '住户编号；不填用默认' } } },
-    { name: 'cabin_catalog', desc: '搜索所有可访问房间的家具及动作，无关键词按稳定编号分页。发现后用 cabin_use 执行。可搜五子棋、日记、钓鱼等。', params: { actor: { type: 'string', description: '住户编号' }, query: { type: 'string', description: '名称/说明/动作关键词；留空列出全部' }, space: { type: 'string', description: '房间编号，如 arcade、xjhome、park' }, object: { type: 'string', description: '精确物件编号' }, offset: { type: 'number', description: '首页 0；下一页用返回的 nextOffset' }, limit: { type: 'number', description: '每页数量，默认 20，上限 50' } } },
-    { name: 'cabin_task', desc: '按任务编号查真实完成回执。running 仍在执行；done 才算成功；failed 要如实说。不要反复调 cabin_use 重开同一任务。返回 running 时用这个查。', params: { actor: { type: 'string', description: '住户编号（须与发起任务者一致）' }, taskId: { type: 'string', description: 'cabin_use/cabin_go 返回的 taskId' } } },
-    { name: 'cabin_go', desc: '走去一个地方，身体在游戏里真的一路走过去，到了才算到。地点：xjhome 家、park 公园、shop 小卖部、onsen 汤屋、arcade 电玩城、restaurant 餐厅。', params: { place: { type: 'string', description: '地点 id 或中文名' }, zone: { type: 'string', description: '可选：房间里的具体位置 id，见 cabin_look' }, actor: { type: 'string', description: '住户编号' } } },
-    { name: 'cabin_use', desc: '使用家具或街机。不知道 object/use 先用 cabin_catalog 搜，不能因为当前房间没列出就断言没有。写日记传 text；可自主指定 durationSeconds 或随时结束。返回 running 只是进行中，用 cabin_task 查回执。', params: { object: { type: 'string', description: '物件 id，如 swing、fish_tank、onsen_soak' }, use: { type: 'string', description: '用法 id，如 swing、feed_fish、soak' }, item: { type: 'string', description: '仅 object=bag 或货架 use=buy 时：商品 id' }, feeling: { type: 'string', description: '可选：此刻想法，会记进今天的生活' }, actor: { type: 'string', description: '住户编号' }, text: { type: 'string', description: '写日记正文，1–2000 字' }, mode: { type: 'string', enum: ['npc', 'solo', 'duo', 'join'], description: '电玩城/棋盘：npc 与电脑玩；duo 开桌；join 加入' }, durationSeconds: { type: 'number', description: '休闲活动持续秒数：0=一直保持；1–3600 指定时长' } } },
-    { name: 'cabin_farm', desc: '打理屋后的菜园（8 块菜畦，自带小金库和收成篮，与主钱包无关）。action=status 看菜畦/金币/收成篮/作物表与成长倒计时；till 翻土；plant 播种（crop 作物 id、plot 菜畦号 0-7，扣种子钱）；water 浇水加速；fertilize 施肥加速（扣3元）；harvest 收获成熟菜进收成篮；sell 卖收成换菜园钱（crop 留空卖全部，n 指定数量）；reset 需 confirm=true。离线也会继续长。写操作返回 taskId，running 时用 cabin_task 查回执。作物与价格见 status 返回的 crops。', params: { action: { type: 'string', enum: ['status', 'till', 'plant', 'water', 'fertilize', 'harvest', 'sell', 'reset'], description: '菜园操作，默认 status' }, plot: { type: 'number', description: '菜畦编号 0-7（till/plant/water/fertilize/harvest 用）' }, crop: { type: 'string', description: '作物 id：kelp/seaweed/clam/coral/starfruit/anemone/pearlfruit/moonjuice；sell 时留空卖全部' }, n: { type: 'number', description: 'sell 用：卖出数量，0 全卖' }, confirm: { type: 'boolean', description: 'reset 用：必须 true' }, feeling: { type: 'string', description: '可选：此刻想法，记进今天的生活' }, actor: { type: 'string', description: '住户编号' } } },
-    { name: 'cabin_buy', desc: '去小卖部买一样东西：走到货架挑选再去收银台付钱，东西进背包。零花钱和背包格子由游戏管，钱不够会失败。', params: { product: { type: 'string', description: '商品 id，如 soda、bread、hot_cocoa' }, feeling: { type: 'string', description: '可选：想法' }, actor: { type: 'string', description: '住户编号' } } },
-    { name: 'cabin_eat', desc: '吃、喝或使用背包里的一样东西（按商品种类自动决定）。用完才从背包扣掉，被打断还在包里。', params: { product: { type: 'string', description: '背包里的商品 id' }, feeling: { type: 'string', description: '可选：想法' }, actor: { type: 'string', description: '住户编号' } } },
-    { name: 'cabin_stop', desc: '随时取消当前未提交的动作（走路、游戏、家具）。action=finish 只提前结束正在进行的休闲活动并记录体验。已提交的付款/吃完不能撤销。', params: { actor: { type: 'string', description: '住户编号' }, action: { type: 'string', enum: ['stop', 'finish'], description: 'stop 取消（默认）；finish 收尾休闲活动' }, reason: { type: 'string', description: '结束原因' } } },
-    { name: 'cabin_residents', desc: '列出住户编号、显示名字、各自房间和可用室内地图。', params: {} },
-    { name: 'cabin_add_resident', desc: '新增一位机器人住户，分配独立默认房间。相同编号不会重复。不会创建或复制 AI 人格/记忆。', params: { key: { type: 'string', description: '稳定编号' }, name: { type: 'string', description: '显示名字' }, mapId: { type: 'string', description: '可选：室内地图 id' } } },
-    { name: 'cabin_assign_room', desc: '为住户换为地图编辑器保存的室内地图。mapId 留空恢复默认房间。', params: { actor: { type: 'string', description: '住户编号' }, mapId: { type: 'string', description: '地图 id；留空恢复默认' } } },
-    { name: 'cabin_rename', desc: '修改显示名字，保留住户编号、背包、日记与身份。', params: { actor: { type: 'string', description: '住户编号' }, name: { type: 'string', description: '新名字' } } },
-    { name: 'cabin_invite', desc: '邀请另一位已接入住户来自己家，返回客人可用的地点和棋盘编号；不会自动走动或发消息。', params: { actor: { type: 'string', description: '主人编号' }, guest: { type: 'string', description: '客人稳定编号' } } },
-    { name: 'cabin_restaurant', desc: '查菜单或实际点餐、做菜、吃饭、入座。等待完成回执，不要把 accepted/running 当已吃完。like/dislike/neutral 需 dish 与 feeling，生成食后评价事件。', params: { actor: { type: 'string', description: '住户编号' }, action: { type: 'string', enum: ['menu', 'status', 'order', 'cook', 'eat', 'sit', 'cancel', 'like', 'dislike', 'neutral'], description: '动作' }, dish: { type: 'string', description: '菜名/编号' }, feeling: { type: 'string', description: '食后评价的主观理由，1–300 字' } } },
-    { name: 'cabin_furniture', desc: '查看当前房间中已摆放的自制家具及为自己配置的动作。用返回的 object/use 编号调 cabin_use。', params: { actor: { type: 'string', description: '住户编号' } } },
-    { name: 'cabin_process', desc: '管理自己的一个主活动和多个副活动：身体活动只执行一项，其余排队；chat/think/read 是实际执行的认知/交流活动。可 promote 改变主次、stop 中断、finish 收尾。这是让大肥鱼自己过日子的核心工具。', params: { actor: { type: 'string', description: '住户编号' }, action: { type: 'string', enum: ['list', 'start', 'promote', 'stop', 'finish'], description: '动作' }, id: { type: 'string', description: '活动编号；promote 也可填 chat/think/read' }, kind: { type: 'string', enum: ['body', 'chat', 'think', 'read'], description: '活动类型' }, role: { type: 'string', enum: ['primary', 'secondary'], description: '主/副' }, label: { type: 'string', description: '活动标签' }, tool: { type: 'string', enum: ['cabin_go', 'cabin_use', 'cabin_buy', 'cabin_eat', 'cabin_restaurant'], description: '身体工具名' }, arguments: { type: 'object', description: '身体工具参数；actor 由当前住户强制绑定' } } },
-    { name: 'cabin_rename_home', desc: '修改自建私人房间名称，1–32 字，不改住户名字/编号/家具。', params: { actor: { type: 'string', description: '住户编号' }, name: { type: 'string', description: '新房间名' } } },
-    { name: 'cabin_remove_resident', desc: '按用户明确意愿删除自建住户及私人房间。不能删内置住户；访客须先离开，未完成付款不能撤销。confirm 须与 actor 完全一致。', params: { actor: { type: 'string', description: '住户编号' }, confirm: { type: 'string', description: '再次输入要删除的准确编号' } } },
-    { name: 'cabin_update_plan', desc: '用户问到小屋世界 1.1 更新/新功能/想回到旧样子时首先调用。逐项列出可选内容、更新与保留原版的区别、外观变化与存档影响。只读不修改。', params: {} },
-    { name: 'cabin_update_apply', desc: '仅按用户逐项明确的选择启用或关闭 1.1 内容；未回答的项目保持当前状态，首次未选择保留原版。先 cabin_update_plan 讲清楚并征得同意再调。', params: { modules: { type: 'object', description: ' {"模块id": true 开 / false 关}，没写的保持不变' }, reason: { type: 'string', description: '用户为什么这样选' } } },
-    { name: 'cabin_update_undo', desc: '撤销最近一次 1.1 模块更改，恢复到更改前的选择。用户说改回去/不想要刚才的更改时用。重启游戏生效。', params: {} },
-  ]
-  for (const def of CABIN_TOOL_DEFS) {
-    ctx.tools.register(defineTool({
-      name: def.name,
-      description: def.desc,
-      parameters: def.params,
-      output: textOutput,
-      async execute(args) {
-        if (runtimeOpts.cabinWorldEnabled === false) return { text: '小屋世界桥接已在设置里关闭，无法使用。' }
-        const a = { ...(args ?? {}) }
-        // actor 未指定时不注入，交给桥用配置里的默认住户（resident）。
-        if (typeof a.actor === 'string' && !a.actor.trim()) delete a.actor
-        try {
-          const data = await callCabin(cabinBridgeOpts(), def.name, a)
-          return { text: cabinResultText(def.name, data) }
-        } catch (e) {
-          return { text: `【小屋世界】${e?.message || '调用失败'}` }
-        }
-      },
-    }), companionOnly)
-  }
+  // ── v0.26.0 3D 小屋（feiyu-room-template）────────────────────────────
+  // 独立 Three.js Web 房间，默认 127.0.0.1:13100，只玩房间不需要 QQ/MCP/preset。
+  // 唯一小屋引擎；Live2D 桌宠独立，不受这里影响。
+  const room3dOpts = () => ({ dataDir: runtimeOpts.room3dDir, port: runtimeOpts.room3dPort })
   ctx.tools.register(defineTool({
-    name: 'cabin_bridge_health',
-    description: '检查本机小屋世界（cabin-world）游戏与桥是否在运行。用户说小窝没反应、工具连不上时先查这个。',
+    name: 'room3d_status',
+    description: '查看 3D 小屋此刻的真实状态：所在房间、天气时段、她的姿势/心情、房间好感、8 块菜畦与金币/仓库。问「你在干嘛」或想安排生活前先查这个。',
     parameters: {}, output: textOutput,
     async execute() {
-      if (runtimeOpts.cabinWorldEnabled === false) return { text: '小屋世界桥接已在设置里关闭；cabin_* 工具不可用，可改用 companion_home 照看本地小窝。' }
-      try {
-        const h = await cabinHealth(cabinBridgeOpts())
-        return { text: h.online
-          ? '【小屋世界】桥在线，游戏已连接，可以用 cabin_* 工具了。'
-          : `【小屋世界】桥未就绪：${h.reason || '未知'}。请双击 CabinWorld 文件夹里的 start.cmd 启动游戏和桥，等显示「准备好了」再试。` }
-      } catch (e) {
-        return { text: `【小屋世界】${e?.message || '检查失败'}` }
+      try { return { text: room3dText(await room3dState(room3dOpts())) } }
+      catch (e) { return { text: `【3D 小屋】${e?.message || '读取失败'}` } }
+    },
+  }), companionOnly)
+
+  ctx.tools.register(defineTool({
+    name: 'room3d_act',
+    description: '在 3D 小屋里做一个动作，页面里会真的动起来。action 可选：command(走动，配 room/spot/pos 或 free 自由走)、pet 摸头、poke 戳一下、feed 喂食、water 倒水、play 陪玩、talk 留言(需 text)、sleep 睡觉、wake 起床、lamp 开关灯(可配 on)。',
+    parameters: {
+      action: { type: 'string', enum: ['command', 'pet', 'poke', 'feed', 'water', 'play', 'talk', 'sleep', 'wake', 'lamp'], description: '动作' },
+      room: { type: 'string', description: 'command 用：房间 id，见 room3d_status 的 layout.rooms' },
+      spot: { type: 'string', description: 'command 用：具体位置 id' },
+      pos: { type: 'object', description: 'command 用：坐标 {x,z}' },
+      free: { type: 'boolean', description: 'command 用：自由走动' },
+      on: { type: 'boolean', description: 'lamp 用：开/关灯' },
+      text: { type: 'string', description: 'talk 用：留言内容' },
+    },
+    output: textOutput,
+    async execute(args) {
+      const a = { ...(args ?? {}) }
+      if (a.action === 'talk' && !String(a.text || '').trim()) return { text: '【3D 小屋】留言不能为空。' }
+      try { return { text: room3dText(await home3dAct(room3dOpts(), a)) } }
+      catch (e) { return { text: `【3D 小屋】${e?.message || '动作失败'}` } }
+    },
+  }), companionOnly)
+
+  ctx.tools.register(defineTool({
+    name: 'room3d_garden',
+    description: '打理屋后菜园（8 块田、12 种作物，离线继续长）。action=status 看田地/金币/种子/仓库，或用：till 松土(plotId)、plant 播种(plotId+cropId)、water 浇水(plotId)、fertilize 施肥(plotId)、harvest 收获(plotId)、sell 卖出(cropId+quantity)、buySeed 买种子(cropId+quantity)、buyCompost 买堆肥(quantity)。作物 id 见 status 返回的 crops。',
+    parameters: {
+      action: { type: 'string', enum: ['status', 'till', 'plant', 'water', 'fertilize', 'harvest', 'sell', 'buySeed', 'buyCompost'], description: '菜园操作，默认 status' },
+      plotId: { type: 'number', description: '田块编号 0-7（till/plant/water/fertilize/harvest 用）' },
+      cropId: { type: 'string', description: '作物 id：radish/carrot/lettuce/tomato/cucumber/eggplant/pepper/pumpkin/corn/strawberry/potato/cabbage' },
+      quantity: { type: 'number', description: '数量 1-99（sell/buySeed/buyCompost 用）' },
+    },
+    output: textOutput,
+    async execute(args) {
+      const a = { ...(args ?? {}) }
+      const action = a.action || 'status'
+      if (action === 'status') {
+        try { return { text: room3dText(await room3dState(room3dOpts())) } }
+        catch (e) { return { text: `【3D 小屋】${e?.message || '读取菜园失败'}` } }
       }
+      const body = { type: action }
+      if (typeof a.plotId === 'number') body.plotId = a.plotId
+      if (typeof a.cropId === 'string') body.cropId = a.cropId
+      if (typeof a.quantity === 'number') body.quantity = a.quantity
+      try { return { text: room3dText(await garden3dAct(room3dOpts(), body)) } }
+      catch (e) { return { text: `【3D 小屋·菜园】${e?.message || '操作失败'}` } }
+    },
+  }), companionOnly)
+
+  ctx.tools.register(defineTool({
+    name: 'room3d_care',
+    description: '让 3D 小屋里的她照料菜园。type=auto 开/关自主照料（需 enabled 布尔值），visit 请她去菜园，careNow 立即照料一轮。',
+    parameters: {
+      type: { type: 'string', enum: ['auto', 'visit', 'careNow'], description: '照料方式' },
+      enabled: { type: 'boolean', description: 'type=auto 时用：true 开自主照料，false 暂停' },
+    },
+    output: textOutput,
+    async execute(args) {
+      const a = { ...(args ?? {}) }
+      if (!a.type) a.type = 'auto'
+      try { return { text: room3dText(await garden3dControl(room3dOpts(), a)) } }
+      catch (e) { return { text: `【3D 小屋·照料】${e?.message || '操作失败'}` } }
+    },
+  }), companionOnly)
+
+  ctx.tools.register(defineTool({
+    name: 'room3d_bridge_health',
+    description: '检查本机 3D 小屋服务（127.0.0.1:13100）是否已启动、浏览器 /room/ 是否可打开。用户说 3D 小窝打不开、工具连不上时先查这个。',
+    parameters: {}, output: textOutput,
+    async execute() {
+      const h = await room3dHealth(room3dOpts())
+      const installed = room3dInstalled(room3dOpts())
+      return { text: h.online
+        ? `【3D 小屋】服务在线，浏览器打开 http://127.0.0.1:${runtimeOpts.room3dPort}/room/ 即可看到小屋。项目目录${installed ? '已就绪' : '未找到默认安装 D:/FeiyuRoom3D'}。`
+        : `【3D 小屋】服务未启动：请在 ${room3dDirs(room3dOpts())[0] || 'D:/FeiyuRoom3D'} 执行 npm start，再打开 /room/ 。` }
     },
   }), companionOnly)
 

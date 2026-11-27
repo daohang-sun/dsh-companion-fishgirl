@@ -1,10 +1,19 @@
-## v0.26.0 · 桌宠外壳改用 Windows 系统自带 WebView2（未发布）· 2026-11-26
+## v0.27.0 · 取消 2D Godot 小屋引擎 · 2026-11-27
 
-- **去掉外接游戏引擎/Electron 内核**：桌宠窗口不再依赖 Electron，改用 Windows 预装的 **Edge WebView2 Runtime** + Python ctypes 直接调 COM（当前环境不允许运行时编译 C#，故用纯解释方案，零编译、零第三方包）。`pet/webview2/host.py` 启动本机 `server-only.mjs`（沿用原有 Live2D 模型服务与命令/事件队列），再用系统 WebView2 加载桌宠页；`wv2.py` 是最小 COM 绑定（接口顺序来自官方 WebView2.h 1.0.4370.26）。
-- **交互**：透明无边框置顶窗口，顶部 44px 为拖拽区、其余区域交给 Live2D 互动；F9 切换鼠标穿透，Ctrl+Shift+Q 退出。背景通过 `ICoreWebView2Controller2.put_DefaultBackgroundColor` 设为全透明。
-- **插件启动路由改为优先 WebView2**：`pet/launch` 探测到 `webview2/host.py` + `WebView2Loader.dll` 时用 `python` 拉起系统宿主，Electron 退为回退路径；目录探测顺序改为**本插件 `pet/`（codearts 版本）优先**，即桌宠文件随插件走。GET 状态新增 `engine: 'webview2' | 'electron'`。
-- **文件归位到 codearts 版本**：桌宠程序（含 WebVIEW2 宿主与 Loader）恢复到 `dsh-companion-fishgirl/pet/`；`package.json` 版本升到 **0.26.0**，`files` 纳入 `pet/start-webview2.cmd`、`pet/webview2/{host.py,wv2.py,WebView2Loader.dll}`；`.gitignore` 排除 WebView2 用户数据与日志。
-- 验证：Runtime 158.0.4370.33 环境创建/透明背景/Controller/Navigate 全链路 `hr=0`；宿主端到端启动日志显示本机服务就绪 + 页面加载成功；插件 `npm run build` 通过。
+- **小屋只保留 3D**：移除 Godot 像素小屋（cabin-world）的桥客户端、`cabin_*` 全部工具（含 `cabin_bridge_health`）、`/api/companion-fishgirl/cabin-world` 状态路由，以及设置里的引擎选择、原版小屋开关与数据目录输入。3D 小屋（feiyu-room-template）成为唯一小屋引擎，`room3d_*` 工具始终可用。
+- **保留的部分**：侧栏「此刻 / 院子 / 画册」的像素视图、`companion_home` 工具、`assets/cabin/` 的 CC BY 4.0 素材与 AI 绘制家具素材都还在——它们属于本地小窝视图，不依赖 Godot 游戏。Live2D 桌宠（含 WebView2 启动与桥接）完全不变。
+- **提示词同步**：小窝指引固定为 3D 小屋工具说明，并补一句侧栏像素视图由 `companion_home` 照看；设置路由不再接受已废弃的 `homeEngine` / `cabinWorldEnabled` / `cabinWorldDataDir` 字段。
+- **体积**：bundle 从 243KB 降到 219KB。
+
+## v0.26.0 · 3D 海底小屋（feiyu-room-template）接入（未发布）· 2026-11-26
+
+- **小屋引擎可选**：设置卡「记忆与小窝 → 小屋引擎」可在「像素小屋（Godot cabin-world）」与「3D 海底小屋（Web）」之间切换。`cabin_*` 与 `room3d_*` 两套工具运行时互斥，切换无需重启 dsh；**Live2D 桌宠完全不受影响**（桌宠启动路由与工具保持不变）。
+- **接的是 GitHub 3D 项目本体**：`SQDFeng/feiyu-room-template` v3.0.0（MIT），源码下载到 `D:/FeiyuRoom3D`，只装核心源码 + 6.7MB 优化 3D 模型（跳过 58MB 原始模型备份与两个安装包）。`npm ci` 装依赖，生成本机专用 `config.json`（只开房间、关 QQ/社交/MCP、随机控制台 token、端口 13100）。**只玩房间不需要 QQ / SnowLuma / 改 DSH 全局 preset**。
+- **新增本机 REST 客户端** `src/room3d-client.ts`：只连回环、端口固定白名单（默认 13100）、路径白名单、不下发项目 token、返回过滤敏感字段与截断长度。封装 `/api/room/state`、`/api/home/state`、`/api/garden/state`、`/api/room/act`、`/api/home/act`、`/api/garden/act`、`/api/garden/control`。业务失败（400 + message）原样回给模型，保留「先松土」「金币不够」这类真实原因。
+- **新增 5 个工具**：`room3d_status`（房间/时段/姿势/菜园快照）、`room3d_act`（走动/摸头/喂食/玩耍/留言/睡觉/开关灯）、`room3d_garden`（8 畦 12 作物的松土/播种/浇水/施肥/收获/买卖）、`room3d_care`（自主照料开关/请她去菜园/立即照料）、`room3d_bridge_health`。每轮小窝提示词按引擎注入对应指引。
+- **面板与一键启动**：设置卡显示 3D 服务状态灯、目录/端口输入、「启动 3D 小屋」按钮；侧栏「鱼鱼小窝 → 3D 小屋」可查看状态、启动并打开浏览器 `/room/`。新增同源路由 `/api/companion-fishgirl/room3d`（GET 状态 / POST launch），由宿主进程用当前 Node 直接执行 `src/bridge.js`（绕开 Windows 下 `spawn('npm.cmd', detached)` 的 EINVAL），等待最多 20 秒确认服务起来。项目自带 `start.cmd` 可手动启动。
+- **修掉的坑**：原项目 consolePort 同时服务房间与控制台（不是单独的 13100 房间端口），配置已对齐；`room3d_care(auto)` 需要 `enabled` 布尔值，工具 schema 已补。
+- 验证：room3d 客户端对真实服务 11/11 PASS（健康、三态读、松土/播种/浇水/留言/摸头/照料、失败信息保留、返回截断）；插件路由隔离 12/12 PASS（引擎切换与持久化、`..`/端口校验、跨站 403、非法 action、工具注册、桌宠路由未动）；插件启动路由实测拉起服务并返回 200、`/room/` 200；`npm run build` 与 `node --check client.js` 通过。
 
 ## v0.25.2 · TeleAgent 重绘家具落地 + 菜园状态联动（未发布）· 2026-11-25
 
