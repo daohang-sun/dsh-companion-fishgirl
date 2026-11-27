@@ -287,10 +287,13 @@ window.__ModuleLoader__.load({
       }, [])
       const online = !!(st && st.online)
       const color = online ? '#5FB98A' : '#D96A5B'
-      return h('div', { style: { display: 'flex', alignItems: 'center', gap: 8, padding: '6px 10px', margin: '2px 0 6px', borderRadius: 9, background: 'var(--dsw-alias-fill-tertiary,rgba(116,174,197,.08))', fontSize: 11.5 } },
-        h('i', { style: { width: 8, height: 8, borderRadius: '50%', background: color, flex: 'none' } }),
-        h('span', null, online ? '3D 小屋已就绪，浏览器打开 /room/ 即可进入' : (st ? '3D 小屋未启动：在设置卡点「启动 3D 小屋」或执行 npm start' : '正在检查 3D 小屋…')),
-        st && st.dir ? h('span', { style: { opacity: .6, marginLeft: 'auto' } }, String(st.dir)) : null)
+      const issue = st && st.portMismatch
+      return h('div', null,
+        h('div', { style: { display: 'flex', alignItems: 'center', gap: 8, padding: '6px 10px', margin: '2px 0 6px', borderRadius: 9, background: 'var(--dsw-alias-fill-tertiary,rgba(116,174,197,.08))', fontSize: 11.5 } },
+          h('i', { style: { width: 8, height: 8, borderRadius: '50%', background: color, flex: 'none' } }),
+          h('span', null, online ? '3D 小屋已就绪，浏览器打开 /room/ 即可进入' : (st ? '3D 小屋未启动：在设置卡点「启动 3D 小屋」' : '正在检查 3D 小屋…')),
+          st && st.dir ? h('span', { style: { opacity: .6, marginLeft: 'auto' } }, String(st.dir)) : null),
+        issue ? h('div', { className: 'cfgs-desc', style: { color: '#D96A5B', margin: '0 0 6px' } }, issue.message) : null)
     }
     function CompanionSettingsCard() {
       ensureCfgStyle()
@@ -300,6 +303,7 @@ window.__ModuleLoader__.load({
       const [roomDirDraft, setRoomDirDraft] = React.useState(null)
       const [roomPortDraft, setRoomPortDraft] = React.useState(null)
       const [roomLaunch, setRoomLaunch] = React.useState(null)
+      const [roomLaunchBusy, setRoomLaunchBusy] = React.useState(false)
       React.useEffect(() => {
         let alive = true
         settingsApi('GET').then((d) => { if (alive) setOpts(readOpts(d)) })
@@ -378,7 +382,7 @@ window.__ModuleLoader__.load({
           h('div', { className: 'cfgs-row' },
             h('div', { className: 'cfgs-label' },
               h('span', { className: 'cfgs-title' }, '3D 小屋端口'),
-              h('span', { className: 'cfgs-desc' }, '项目 consolePort，默认 13100；改这里要同步改项目 config.json。')),
+              h('span', { className: 'cfgs-desc' }, '对应项目 config.json 的 consolePort（默认 13100）。两处不一致会拒绝启动并提示具体端口，改完记得同步。')),
             h('input', {
               'aria-label': '3D 小屋端口', className: 'fh-input', placeholder: '13100', disabled: !opts, type: 'number',
               value: roomPortDraft !== null ? roomPortDraft : (opts ? String(opts.room3dPort || 13100) : '13100'),
@@ -394,16 +398,19 @@ window.__ModuleLoader__.load({
               onKeyDown: (e) => { if (e.key === 'Enter') e.target.blur() },
             })),
           h('button', {
-            type: 'button', className: 'cfgs-btn', disabled: !opts,
+            type: 'button', className: 'cfgs-btn', disabled: !opts || roomLaunchBusy,
             onClick: () => {
+              setRoomLaunchBusy(true)
               setRoomLaunch('启动中…')
               fetch(resolveApiUrl('/api/companion-fishgirl/room3d'), {
                 method: 'POST', headers: { 'content-type': 'application/json', 'x-companion-settings': '1' },
                 body: JSON.stringify({ action: 'launch' }),
-              }).then((r) => r.json()).then((d) => { setRoomLaunch(d.ok ? '已启动，打开 /room/ 即可' : ('启动失败：' + (d.error || '未知'))) })
-                .catch((e) => setRoomLaunch('启动失败：' + String(e && e.message || e)))
+              }).then((r) => r.json()).then((d) => {
+                setRoomLaunch(d.ok ? '已启动，打开 /room/ 即可' : ('启动失败：' + (d.error || '未知')))
+              }).catch((e) => setRoomLaunch('启动失败：' + String(e && e.message || e)))
+                .finally(() => setRoomLaunchBusy(false))
             },
-          }, '启动 3D 小屋'),
+          }, roomLaunchBusy ? '启动中…' : '启动 3D 小屋'),
           roomLaunch ? h('div', { className: 'cfgs-desc', style: { margin: '4px 0' } }, roomLaunch) : null,
         ),
         Row('curateOnClose', '会话整理',
@@ -1891,6 +1898,7 @@ window.__ModuleLoader__.load({
           .finally(() => setLaunchBusy(false))
       }
       const [room3d, setRoom3d] = React.useState(null)
+      const [roomBusy, setRoomBusy] = React.useState(false)
       const loadRoom3d = React.useCallback(() => fetch(resolveApiUrl('/api/companion-fishgirl/room3d'), { headers: { 'x-companion-settings': '1' } })
         .then((r) => r.json()).then(setRoom3d).catch(() => setRoom3d({ online: false })), [])
       useEffect(() => {
@@ -2043,17 +2051,18 @@ window.__ModuleLoader__.load({
             h('div', { className: 'fh-msg' }, room3d && room3d.online
               ? '3D 小屋已经跑起来了，展开下面的房间就能看到她。菜园、走动、摸头都由 room3d_* 工具驱动，和浏览器里是同一只鱼。'
               : '3D 小屋独立运行，不依赖 Live2D 桌宠。点「启动 3D 小屋」后浏览器会打开房间页面。'),
+            room3d && room3d.portMismatch ? h('div', { className: 'fh-msg', style: { marginTop: 6, color: '#D96A5B' } }, room3d.portMismatch.message) : null,
             h('div', { className: 'fh-chips', style: { marginTop: 8 } },
-              chip('启动 3D 小屋', () => {
-                setRoom3d(Object.assign({}, room3d, { launching: true }))
+              chip(roomBusy ? '启动中…' : '启动 3D 小屋', () => {
+                setRoomBusy(true)
                 fetch(resolveApiUrl('/api/companion-fishgirl/room3d'), {
                   method: 'POST', headers: { 'content-type': 'application/json', 'x-companion-settings': '1' },
                   body: JSON.stringify({ action: 'launch' }),
                 }).then((r) => r.json()).then((d) => {
                   if (d.ok && d.url) window.open(d.url, '_blank', 'noopener')
                   void loadRoom3d()
-                }).catch(() => void loadRoom3d())
-              }, !!(room3d && room3d.launching)),
+                }).catch(() => void loadRoom3d()).finally(() => setRoomBusy(false))
+              }, roomBusy),
               chip('打开房间', () => { if (room3d && room3d.url) window.open(room3d.url, '_blank', 'noopener') }, !(room3d && room3d.online)),
               chip('刷新状态', () => void loadRoom3d())),
             room3d && room3d.url ? h('div', { className: 'fh-msg', style: { marginTop: 6, opacity: .7, wordBreak: 'break-all' } }, room3d.url) : null)) : null,

@@ -1,3 +1,11 @@
+## v0.28.0 · 发布清单与 3D 小屋启动加固 · 2026-11-27
+
+- **打包清单校正**：移除 `package.json` 中 18 个已迁出的 `pet/*` 条目；`npm pack` 不再产出「清单看起来带桌宠、实际一个文件都没有」的空壳包。桌宠由设置项 `petDir` 指向外部目录 `D:/Study/DSH项目/pet/`，不随插件发布。
+- **端口一致性校验**：插件 `room3dPort` 与项目 `config.json` 的 `consolePort` 不一致时，状态路由返回 `portMismatch`，设置卡和 3D 面板显示具体端口与修复方法，启动路由直接拒绝（502）；`room3d_bridge_health` 也会提示，避免只报「连不上」。
+- **启动不再假设宿主是 Node**：新增 `nodeLauncher()`，优先找真正的系统 `node.exe` 执行 `src/bridge.js`；找不到时回退到 `process.execPath` + `ELECTRON_RUN_AS_NODE=1`，兼容 dsh 为 Electron 宿主。
+- **并发启动互斥**：启动路由加互斥锁，重复点击返回 409「正在启动中」；前端设置卡与 3D 面板的启动按钮在请求期间禁用，避免拉起两个 `bridge.js` 撞端口。
+- 验证：`package.json` 清单无缺失，`npm pack --dry-run` 59 个文件且不含桌宠；端口校验 5/5、模拟 Electron 宿主启动与并发锁 4/4。
+
 ## v0.27.0 · 取消 2D Godot 小屋引擎 · 2026-11-27
 
 - **小屋只保留 3D**：移除 Godot 像素小屋（cabin-world）的桥客户端、`cabin_*` 全部工具（含 `cabin_bridge_health`）、`/api/companion-fishgirl/cabin-world` 状态路由，以及设置里的引擎选择、原版小屋开关与数据目录输入。3D 小屋（feiyu-room-template）成为唯一小屋引擎，`room3d_*` 工具始终可用。

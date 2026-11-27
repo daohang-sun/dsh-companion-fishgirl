@@ -102,7 +102,7 @@ async function request(path, method, body, opts) {
     return data;
   } catch (e) {
     if (e?.name === "AbortError") throw new Error("3D 小屋服务响应超时（15 秒），请确认它已启动。");
-    if (e instanceof TypeError) throw new Error("连不上 3D 小屋服务：请先在 D:/FeiyuRoom3D 运行 npm start。");
+    if (e instanceof TypeError) throw new Error("连不上 3D 小屋服务：请在 dsh 侧栏「鱼鱼小窝 → 3D 小屋」点「启动 3D 小屋」，或双击 D:/FeiyuRoom3D/start.cmd。");
     throw e;
   } finally {
     clearTimeout(timer);
@@ -3346,6 +3346,47 @@ function apply(ctx, config = {}) {
     return server;
   };
   if (rawServer()) {
+    let room3dProjectPort = function() {
+      const dir = room3dDirs(room3dOpts())[0];
+      if (!dir) return null;
+      try {
+        const cfg2 = JSON.parse(readFileSync(join2(dir, "config.json"), "utf8"));
+        const n = Number(cfg2 && cfg2.consolePort);
+        return Number.isInteger(n) && n > 1024 && n < 65536 ? n : null;
+      } catch {
+        return null;
+      }
+    }, room3dPortIssue2 = function() {
+      const projectPort = room3dProjectPort();
+      if (!projectPort || projectPort === runtimeOpts.room3dPort) return null;
+      return {
+        pluginPort: runtimeOpts.room3dPort,
+        projectPort,
+        message: `端口不一致：插件设置的是 ${runtimeOpts.room3dPort}，项目 config.json 的 consolePort 是 ${projectPort}。请把设置卡「3D 小屋端口」改为 ${projectPort}（或改项目配置后重启 3D 小屋），否则 room3d_* 工具会连不上。`
+      };
+    }, nodeLauncher = function() {
+      const base = basename(process.execPath).toLowerCase();
+      if (base === "node" || base === "node.exe") return { cmd: process.execPath, env: cleanElectronEnv(), mode: "node" };
+      const sep = process.platform === "win32" ? ";" : ":";
+      const candidates = [];
+      for (const seg of String(process.env.PATH || "").split(sep)) {
+        const s = seg.trim().replace(/^"|"$/g, "");
+        if (s) candidates.push(join2(s, process.platform === "win32" ? "node.exe" : "node"));
+      }
+      for (const root of [process.env.ProgramFiles, process.env["ProgramFiles(x86)"], process.env.LOCALAPPDATA]) {
+        if (root) candidates.push(join2(root, "nodejs", "node.exe"));
+      }
+      candidates.push("C:/Program Files/nodejs/node.exe", "C:/Program Files (x86)/nodejs/node.exe");
+      for (const c of candidates) {
+        try {
+          if (existsSync2(c)) return { cmd: c, env: cleanElectronEnv(), mode: "system-node" };
+        } catch {
+        }
+      }
+      const env = cleanElectronEnv();
+      env.ELECTRON_RUN_AS_NODE = "1";
+      return { cmd: process.execPath, env, mode: "electron-node" };
+    };
     ctx.effect(() => {
       const readJson = (request2) => new Promise((resolve2) => {
         const chunks = [];
@@ -3864,6 +3905,7 @@ function apply(ctx, config = {}) {
     ctx.effect(() => () => {
       if (typeof disposePetLaunch === "function") disposePetLaunch();
     }, "companion-fishgirl: pet launch http route");
+    let room3dLaunching = false;
     const ROOM3D_ENDPOINT = "/api/companion-fishgirl/room3d";
     const disposeRoom3d = ctx.webServer.register({
       kind: "exact",
@@ -3880,7 +3922,17 @@ function apply(ctx, config = {}) {
         if (request2.method === "GET" || request2.method === "HEAD") {
           try {
             const h = await room3dHealth(room3dOpts());
-            reply(200, { ok: true, engine: "room3d", online: h.online, installed: room3dInstalled(room3dOpts()), port: runtimeOpts.room3dPort, url: `http://127.0.0.1:${runtimeOpts.room3dPort}/room/`, dir: (room3dDirs(room3dOpts())[0] || "").split(/[\\/]/).filter(Boolean).pop() || "" });
+            const issue = room3dPortIssue2();
+            reply(200, {
+              ok: true,
+              engine: "room3d",
+              online: h.online,
+              installed: room3dInstalled(room3dOpts()),
+              port: runtimeOpts.room3dPort,
+              portMismatch: issue ? { pluginPort: issue.pluginPort, projectPort: issue.projectPort, message: issue.message } : null,
+              url: `http://127.0.0.1:${runtimeOpts.room3dPort}/room/`,
+              dir: (room3dDirs(room3dOpts())[0] || "").split(/[\\/]/).filter(Boolean).pop() || ""
+            });
           } catch (err) {
             reply(200, { ok: true, online: false, error: String(err) });
           }
@@ -3893,72 +3945,89 @@ function apply(ctx, config = {}) {
             reply(400, { ok: false, error: "非法 action" });
             return;
           }
-          const h = await room3dHealth(room3dOpts());
-          if (h.online) {
-            reply(200, { ok: true, started: false, alreadyRunning: true, url: `http://127.0.0.1:${runtimeOpts.room3dPort}/room/` });
-            return;
+          if (action === "launch") {
+            if (room3dLaunching) {
+              reply(409, { ok: false, error: "3D 小屋正在启动中，请稍候再试。" });
+              return;
+            }
+            room3dLaunching = true;
           }
-          if (action === "open") {
-            reply(502, { ok: false, error: "3D 小屋服务未启动。" });
-            return;
-          }
-          const dir = room3dDirs(room3dOpts())[0];
-          if (!dir || !room3dInstalled(room3dOpts())) {
-            reply(502, { ok: false, error: `未找到 3D 小屋项目（默认 D:/FeiyuRoom3D）。请先在设置卡填写正确目录。` });
-            return;
-          }
-          const entry = join2(dir, "src", "bridge.js");
-          if (!existsSync2(entry)) {
-            reply(502, { ok: false, error: "缺少入口 src/bridge.js，项目不完整。" });
-            return;
-          }
-          const log = join2(dir, "room3d-launch.log");
-          let fd = -1;
           try {
-            fd = openSync(log, "a");
-          } catch {
-          }
-          let child;
-          try {
-            child = spawn(process.execPath, [entry], {
-              cwd: dir,
-              env: cleanElectronEnv(),
-              detached: true,
-              windowsHide: true,
-              stdio: ["ignore", fd >= 0 ? fd : "ignore", fd >= 0 ? fd : "ignore"]
-            });
-          } catch (err) {
+            const h = await room3dHealth(room3dOpts());
+            if (h.online) {
+              reply(200, { ok: true, started: false, alreadyRunning: true, url: `http://127.0.0.1:${runtimeOpts.room3dPort}/room/` });
+              return;
+            }
+            if (action === "open") {
+              reply(502, { ok: false, error: "3D 小屋服务未启动。" });
+              return;
+            }
+            const issue = room3dPortIssue2();
+            if (issue) {
+              reply(502, { ok: false, error: issue.message, portMismatch: { pluginPort: issue.pluginPort, projectPort: issue.projectPort } });
+              return;
+            }
+            const dir = room3dDirs(room3dOpts())[0];
+            if (!dir || !room3dInstalled(room3dOpts())) {
+              reply(502, { ok: false, error: `未找到 3D 小屋项目（默认 D:/FeiyuRoom3D）。请先在设置卡填写正确目录。` });
+              return;
+            }
+            const entry = join2(dir, "src", "bridge.js");
+            if (!existsSync2(entry)) {
+              reply(502, { ok: false, error: "缺少入口 src/bridge.js，项目不完整。" });
+              return;
+            }
+            const log = join2(dir, "room3d-launch.log");
+            let fd = -1;
+            try {
+              fd = openSync(log, "a");
+            } catch {
+            }
+            let child;
+            const launcher = nodeLauncher();
+            try {
+              child = spawn(launcher.cmd, [entry], {
+                cwd: dir,
+                env: launcher.env,
+                detached: true,
+                windowsHide: true,
+                stdio: ["ignore", fd >= 0 ? fd : "ignore", fd >= 0 ? fd : "ignore"]
+              });
+            } catch (err) {
+              if (fd >= 0) {
+                try {
+                  closeSync(fd);
+                } catch {
+                }
+              }
+              reply(502, { ok: false, error: "3D 小屋启动失败：" + String(err && err.message || err) });
+              return;
+            }
             if (fd >= 0) {
               try {
                 closeSync(fd);
               } catch {
               }
             }
-            reply(502, { ok: false, error: "3D 小屋启动失败：" + String(err && err.message || err) });
-            return;
-          }
-          if (fd >= 0) {
-            try {
-              closeSync(fd);
-            } catch {
+            if (!child?.pid) {
+              reply(502, { ok: false, error: "3D 小屋进程未能启动。" });
+              return;
             }
-          }
-          if (!child?.pid) {
-            reply(502, { ok: false, error: "3D 小屋进程未能启动。" });
-            return;
-          }
-          child.unref();
-          let ready = false;
-          for (let i = 0; i < 40; i++) {
-            await new Promise((done) => setTimeout(done, 500));
-            if ((await room3dHealth(room3dOpts())).online) {
-              ready = true;
-              break;
+            child.unref();
+            let ready = false;
+            for (let i = 0; i < 40; i++) {
+              await new Promise((done) => setTimeout(done, 500));
+              if ((await room3dHealth(room3dOpts())).online) {
+                ready = true;
+                break;
+              }
             }
+            if (ready) reply(200, { ok: true, started: true, pid: child.pid, mode: launcher.mode, url: `http://127.0.0.1:${runtimeOpts.room3dPort}/room/` });
+            else reply(502, { ok: false, error: "3D 小屋进程已拉起，但 20 秒内未就绪。请查看 " + log });
+            return;
+          } finally {
+            if (action === "launch") room3dLaunching = false;
           }
-          if (ready) reply(200, { ok: true, started: true, pid: child.pid, url: `http://127.0.0.1:${runtimeOpts.room3dPort}/room/` });
-          else reply(502, { ok: false, error: "3D 小屋进程已拉起，但 20 秒内未就绪。请查看 " + log });
-          return;
         }
         response.writeHead(405, { allow: "GET, HEAD, POST" });
         response.end();
@@ -4214,13 +4283,17 @@ ${log.join("\n")}` : "",
   }), companionOnly);
   ctx.tools.register(defineTool({
     name: "room3d_bridge_health",
-    description: "检查本机 3D 小屋服务（127.0.0.1:13100）是否已启动、浏览器 /room/ 是否可打开。用户说 3D 小窝打不开、工具连不上时先查这个。",
+    description: "检查本机 3D 小屋服务是否已启动、浏览器 /room/ 是否可打开，并校验插件端口与项目 config.json 的 consolePort 是否一致。用户说 3D 小窝打不开、工具连不上时先查这个。",
     parameters: {},
     output: textOutput,
     async execute() {
       const h = await room3dHealth(room3dOpts());
       const installed = room3dInstalled(room3dOpts());
-      return { text: h.online ? `【3D 小屋】服务在线，浏览器打开 http://127.0.0.1:${runtimeOpts.room3dPort}/room/ 即可看到小屋。项目目录${installed ? "已就绪" : "未找到默认安装 D:/FeiyuRoom3D"}。` : `【3D 小屋】服务未启动：请在 ${room3dDirs(room3dOpts())[0] || "D:/FeiyuRoom3D"} 执行 npm start，再打开 /room/ 。` };
+      const issue = room3dPortIssue();
+      const portTip = issue ? `
+${issue.message}` : "";
+      const dir = room3dDirs(room3dOpts())[0] || "D:/FeiyuRoom3D";
+      return { text: h.online ? `【3D 小屋】服务在线，浏览器打开 http://127.0.0.1:${runtimeOpts.room3dPort}/room/ 即可看到小屋。项目目录${installed ? "已就绪" : "未找到默认安装 D:/FeiyuRoom3D"}。${portTip}` : `【3D 小屋】服务未启动：请在 dsh 侧栏「鱼鱼小窝 → 3D 小屋」或设置卡点「启动 3D 小屋」（等价操作：在 ${dir} 双击 start.cmd），再打开 /room/ 。${portTip}` };
     }
   }), companionOnly);
   ctx.tools.register(defineTool({

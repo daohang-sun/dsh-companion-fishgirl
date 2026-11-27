@@ -124,7 +124,7 @@ async function request(path, method, body, opts) {
     return data
   } catch (e) {
     if (e?.name === 'AbortError') throw new Error('3D 小屋服务响应超时（15 秒），请确认它已启动。')
-    if (e instanceof TypeError) throw new Error('连不上 3D 小屋服务：请先在 D:/FeiyuRoom3D 运行 npm start。')
+    if (e instanceof TypeError) throw new Error('连不上 3D 小屋服务：请在 dsh 侧栏「鱼鱼小窝 → 3D 小屋」点「启动 3D 小屋」，或双击 D:/FeiyuRoom3D/start.cmd。')
     throw e
   } finally {
     clearTimeout(timer)
