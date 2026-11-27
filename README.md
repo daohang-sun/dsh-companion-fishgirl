@@ -358,7 +358,7 @@ v0.27.0 起小屋引擎**只保留 3D 海底小屋**：Godot 像素小屋（cabi
 1. **解压模型**：把 `DeepSeek免费公皮.zip` 里的 `DeepSeek` 文件夹解压到任意目录（里面有 `大肥鱼.model3.json` 和 `.moc3`）。**本插件不打包、不分发模型文件**——只读你自己解压的目录。
 2. **配置路径**：在桌宠目录（默认 `D:/Study/DSH项目/pet/`）里确认 `config.json` 存在（可从 `config.example.json` 复制），填 `modelPath` 为该目录（也可在启动时用环境变量 `DSH_FISH_MODEL` 指定）。
 3. **在 dsh 里一键启动（推荐）**：打开侧栏「🐟 鱼鱼小窝 → Live2D 桌宠」，顶部「启动 Live2D 桌宠」卡片点 **「🚀 启动 Electron 桌宠」** 即可，**不用再去文件管理器双击**。按钮由插件宿主进程在本机拉起 Electron（浏览器端不碰进程），启动成功后自动打开桥接；若提示未安装 Electron，点 **「安装 Electron」** 等后台安装完成再启动。启动日志写在所选桌宠目录的 `electron-launch.log`。
-   - 也可以手动双击桌宠目录下的 `start.cmd`（零依赖离线浏览器窗）或 `start-electron.cmd`（透明置顶 Electron 窗），效果相同。
+   - 手动启动也默认 Electron：双击桌宠目录下的 `start.cmd`（调 `launch-electron.mjs`，透明置顶窗）或 `start-electron.cmd`，效果相同；断网或不想装 Electron 时用 `start-browser.cmd`（零依赖浏览器窗）回退。
 4. **开桥接（二选一，即时生效无需重启 dsh）**：
    - **最快**：上面的一键启动会自动开启；若桌宠已先手动启动，tab 里橙色「桥接未开启」下方点 **「一键开启桥接」**。
    - **或在设置卡**：dsh 左侧栏「插件」→ 找到 dsh-companion-fishgirl → 详情页底部的配置卡里打开 **「Live2D 桌宠桥接」** 开关。  

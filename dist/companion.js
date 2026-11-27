@@ -3780,9 +3780,10 @@ function apply(ctx, config = {}) {
             installed,
             running: !!api2,
             installName: petDirLabel(dir),
+            defaultMode: "electron",
             bridgeEnabled: runtimeOpts.petBridgeEnabled,
             pid: lastPetLaunchPid || void 0,
-            message: api2 ? "桌宠已运行" : !installed ? "Electron 尚未安装" : "Electron 已就绪：" + petDirLabel(dir) + "，桌宠未启动"
+            message: api2 ? "桌宠已运行（Electron 透明窗）" : !installed ? "Electron 尚未安装" : "Electron 已就绪：" + petDirLabel(dir) + "，桌宠未启动"
           });
           return;
         }

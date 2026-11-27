@@ -2736,9 +2736,10 @@ export function apply(ctx, config = {}) {
           const installed = !!petElectronExe(dir)
           reply(200, {
             ok: true, installed, running: !!api, installName: petDirLabel(dir),
+            defaultMode: 'electron',
             bridgeEnabled: runtimeOpts.petBridgeEnabled,
             pid: lastPetLaunchPid || undefined,
-            message: api ? '桌宠已运行' : !installed ? 'Electron 尚未安装'
+            message: api ? '桌宠已运行（Electron 透明窗）' : !installed ? 'Electron 尚未安装'
               : 'Electron 已就绪：' + petDirLabel(dir) + '，桌宠未启动',
           })
           return

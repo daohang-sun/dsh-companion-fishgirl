@@ -2137,8 +2137,8 @@ window.__ModuleLoader__.load({
                 h('span', { className: 'fh-feed-x' }, label))
             }))) : null,
           h('div', { className: 'fh-sub', style: { lineHeight: 1.6, padding: '0 2px' } },
-            '桌宠是独立程序（pet/ 目录），加载你本机解压的大肥鱼 Live2D 模型；直接点上方的「启动 Electron 桌宠」即可，无需再去文件管理器双击。'
-            + '首次使用若提示未安装 Electron，点「安装 Electron」等待完成再启动；启动后会自动打开桥接，也可以在插件设置卡里手动开关「Live2D 桌宠桥接」。'
+            '桌宠是独立程序（pet/ 目录），默认以 Electron 透明窗启动，加载你本机解压的大肥鱼 Live2D 模型；直接点上方的「启动 Electron 桌宠」即可，无需再去文件管理器双击。'
+            + '手动启动也默认 Electron：双击桌宠目录的 start.cmd；只有想用浏览器模式时才用 start-browser.cmd。首次使用若提示未安装 Electron，点「安装 Electron」等待完成再启动；启动后会自动打开桥接，也可以在插件设置卡里手动开关「Live2D 桌宠桥接」。'
             + '模型版权与署名见 README。面板里的像素小屋不依赖桌宠，随时可用。'))
         : null,
 

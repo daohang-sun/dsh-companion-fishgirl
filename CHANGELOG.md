@@ -1,3 +1,8 @@
+## v0.28.1 · Live2D 桌宠默认 Electron 启动 · 2026-11-27
+
+- **默认引擎改为 Electron**：桌宠目录的 `start.cmd` 从「零依赖浏览器窗」改为调用 `launch-electron.mjs`（透明、置顶、可穿鼠标），未安装 Electron 时自动 `npm install`；`start-electron.cmd` 保留为显式等价入口，`start-browser.cmd` 成为断网/免安装回退。dsh 面板的一键启动本来就是 Electron，状态返回新增 `defaultMode: 'electron'` 明确标注。
+- 同步更新插件 README、桌宠目录 README 与面板说明文案。
+
 ## v0.28.0 · 发布清单与 3D 小屋启动加固 · 2026-11-27
 
 - **打包清单校正**：移除 `package.json` 中 18 个已迁出的 `pet/*` 条目；`npm pack` 不再产出「清单看起来带桌宠、实际一个文件都没有」的空壳包。桌宠由设置项 `petDir` 指向外部目录 `D:/Study/DSH项目/pet/`，不随插件发布。
