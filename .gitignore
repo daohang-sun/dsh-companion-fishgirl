@@ -4,25 +4,7 @@ node_modules/
 # 临时开发目录：测试脚本、解包脚本、预览截图（约 44MB）
 .tmp-harness/
 
-# 本机私有配置：含本机 token 与本机绝对路径，切勿提交
-# 模板见 pet/config.example.json
-pet/config.json
-pet/api.json
-
-# 调试截图产物（运行时/开发生成）
-pet/capture.jpg
-pet/capture-face.png
-pet/final-face.png
-pet/capture-probe.json
-pet/selftest-result.json
-
-# 贴图降采样缓存（运行时从用户本机模型派生，绝不可入库/再分发）
-pet/.texcache/
-
-# WebView2 运行时用户数据 / 日志（本机私有，不入库）
-pet/webview2/userdata/
-pet/webview2/host-launch.log
-pet/webview2/__pycache__/
+# Python 缓存（tools/ 下仍有构建脚本）
 **/__pycache__/
 *.pyc
 
