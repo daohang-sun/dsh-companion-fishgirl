@@ -8,7 +8,7 @@ import { z } from "zod";
 import { existsSync as existsSync2, readFileSync, readdirSync, statSync as statSync2 } from "node:fs";
 import { readFile as readFile2, writeFile, mkdir } from "node:fs/promises";
 import { homedir as homedir2 } from "node:os";
-import { dirname as dirname2, join as join2, extname, basename } from "node:path";
+import { dirname as dirname2, join as join2, extname, basename, isAbsolute as isAbsolute2, resolve } from "node:path";
 import { AsyncLocalStorage } from "node:async_hooks";
 
 // src/home.ts
@@ -1008,15 +1008,15 @@ function userHome() {
   return typeof process !== "undefined" && process.env?.USERPROFILE ? process.env.USERPROFILE : typeof process !== "undefined" && process.env?.DSH_HOME ? process.env.DSH_HOME : homedir();
 }
 function resolveApiPath(configured, extraDirs = []) {
+  const out = [];
   if (typeof configured === "string" && configured.trim()) {
     const p = configured.trim();
-    return isAbsolute(p) || /^[A-Za-z]:[\\/]/.test(p) ? p : join(userHome(), p);
+    out.push(isAbsolute(p) || /^[A-Za-z]:[\\/]/.test(p) ? p : join(userHome(), p));
   }
   const roots = [userHome()];
   if (typeof process !== "undefined" && process.env?.DSH_HOME && process.env.DSH_HOME !== userHome()) {
     roots.push(process.env.DSH_HOME);
   }
-  const out = [];
   const isAbs = (p) => isAbsolute(p) || /^[A-Za-z]:[\\/]/.test(p);
   for (const dir of extraDirs) {
     if (isAbs(dir)) out.push(join(dir, "api.json"));
@@ -1085,6 +1085,33 @@ function resolvePetDir(petDir, configuredApi, extraDirs = []) {
   }
   return null;
 }
+async function readPetResponseText(res) {
+  const reader = typeof res?.body?.getReader === "function" ? res.body.getReader() : null;
+  if (!reader) return res.text();
+  const chunks = [];
+  let total = 0;
+  try {
+    for (; ; ) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      total += value.byteLength;
+      if (total > MAX_PET_RESPONSE_BYTES) {
+        try {
+          await reader.cancel();
+        } catch {
+        }
+        throw new Error("桌宠响应过大");
+      }
+      chunks.push(Buffer.from(value));
+    }
+  } finally {
+    try {
+      reader.releaseLock?.();
+    } catch {
+    }
+  }
+  return Buffer.concat(chunks, total).toString("utf8");
+}
 async function callPet(api, route, body, timeoutMs = 15e3, method = "POST") {
   if (!api || !isLoopbackUrl(api.baseUrl)) throw new Error("桌宠地址不是本机回环地址，已拒绝发送 token");
   const controller = typeof AbortController !== "undefined" ? new AbortController() : null;
@@ -1099,7 +1126,7 @@ async function callPet(api, route, body, timeoutMs = 15e3, method = "POST") {
     const res = await fetch(api.baseUrl + route, init);
     const declared = Number(res.headers?.get?.("content-length") || 0);
     if (declared > MAX_PET_RESPONSE_BYTES) throw new Error("桌宠响应过大");
-    const text = await res.text();
+    const text = await readPetResponseText(res);
     if (text.length > MAX_PET_RESPONSE_BYTES) throw new Error("桌宠响应过大");
     let data;
     try {
@@ -1129,7 +1156,6 @@ function isRichPet(api) {
 
 // src/index.ts
 import { spawn } from "node:child_process";
-import { resolve } from "node:path";
 var sharedPresence = null;
 var PLUGIN_DIR = (() => {
   try {
@@ -2729,16 +2755,58 @@ var mediaKindOf = (mediaType) => String(mediaType).startsWith("video/") ? "video
 function isPrivateHost(hostname) {
   const h = String(hostname || "").toLowerCase().replace(/^\[/, "").replace(/\]$/, "");
   if (!h) return true;
-  if (h === "localhost" || h === "::1" || h === "0.0.0.0") return true;
-  if (h.endsWith(".localhost") || h.endsWith(".local") || h.endsWith(".internal")) return true;
-  if (/^127\./.test(h)) return true;
-  if (/^10\./.test(h)) return true;
-  if (/^192\.168\./.test(h)) return true;
-  if (/^172\.(1[6-9]|2\d|3[01])\./.test(h)) return true;
-  if (/^169\.254\./.test(h)) return true;
-  if (/^(fc|fd)[0-9a-f]{2}:/.test(h)) return true;
-  if (h === "::ffff:127.0.0.1" || h.startsWith("::ffff:10.")) return true;
+  if (h === "localhost" || h.endsWith(".localhost") || h.endsWith(".local") || h.endsWith(".internal")) return true;
+  if (h.includes(":")) {
+    if (h.startsWith("::")) return true;
+    if (/^fe[89ab][0-9a-f]:/.test(h)) return true;
+    if (/^(fc|fd)[0-9a-f]{2}:/.test(h)) return true;
+    return false;
+  }
+  if (!/^[0-9.]+$/.test(h)) return false;
+  const m = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/.exec(h);
+  if (!m) return true;
+  const [a, b, c] = m.slice(1).map(Number);
+  if ([a, b, c, Number(m[4])].some((n) => n > 255)) return true;
+  if (a === 0 || a === 10 || a === 127) return true;
+  if (a === 169 && b === 254) return true;
+  if (a === 172 && b >= 16 && b <= 31) return true;
+  if (a === 192 && b === 168) return true;
+  if (a === 192 && b === 0 && c === 0) return true;
+  if (a === 100 && b >= 64 && b <= 127) return true;
+  if (a === 198 && (b === 18 || b === 19)) return true;
+  if (a >= 224) return true;
   return false;
+}
+async function readCappedBuffer(res, cap, label) {
+  const reader = typeof res?.body?.getReader === "function" ? res.body.getReader() : null;
+  if (!reader) {
+    const buf = Buffer.from(await res.arrayBuffer());
+    if (buf.byteLength > cap) throw new Error(`${label} (${buf.byteLength} 字节) 超过读取上限 ${cap} 字节`);
+    return buf;
+  }
+  const chunks = [];
+  let total = 0;
+  try {
+    for (; ; ) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      total += value.byteLength;
+      if (total > cap) {
+        try {
+          await reader.cancel();
+        } catch {
+        }
+        throw new Error(`${label} (${total} 字节) 超过读取上限 ${cap} 字节`);
+      }
+      chunks.push(Buffer.from(value));
+    }
+  } finally {
+    try {
+      reader.releaseLock?.();
+    } catch {
+    }
+  }
+  return Buffer.concat(chunks, total);
 }
 var MEDIA_DENY_SEGMENTS = [
   ".ssh",
@@ -2815,10 +2883,7 @@ async function downloadMedia(url, cfg) {
     if (declared && declared > cap) {
       throw new Error(`companion_show_media: ${current} (${declared} 字节) 超过读取上限 ${cap} 字节`);
     }
-    const buf = Buffer.from(await res.arrayBuffer());
-    if (buf.byteLength > cap) {
-      throw new Error(`companion_show_media: ${current} (${buf.byteLength} 字节) 超过读取上限 ${cap} 字节`);
-    }
+    const buf = await readCappedBuffer(res, cap, `companion_show_media: ${current}`);
     return { mediaType, data: buf };
   }
   throw new Error("companion_show_media: 重定向次数过多，已放弃下载");
@@ -2893,6 +2958,22 @@ function apply(ctx, config = {}) {
     child.on("error", (err) => ctx.logger.warn(`companion: pet launch failed: ${String(err)}`));
     return { dir, mode, message: "桌宠正在启动，稍等几秒后会自动连上。" };
   };
+  const petApiDirs = () => {
+    const dirs = [];
+    const configured = typeof runtimeOpts.petDir === "string" ? runtimeOpts.petDir.trim() : "";
+    if (configured && (isAbsolute2(configured) || /^[A-Za-z]:[\\/]/.test(configured))) dirs.push(configured);
+    const discovered = resolvePetDir(
+      runtimeOpts.petDir,
+      runtimeOpts.petApiPath,
+      [join2(PLUGIN_DIR, "..", "pet"), join2(PLUGIN_DIR, "pet")]
+    );
+    if (discovered && !dirs.includes(discovered)) dirs.push(discovered);
+    for (const d of [join2(PLUGIN_DIR, "..", "pet"), join2(PLUGIN_DIR, "pet")]) {
+      if (!dirs.includes(d)) dirs.push(d);
+    }
+    return dirs;
+  };
+  const readRuntimePetApi = () => readPetApi(runtimeOpts.petApiPath, petApiDirs());
   const syncMemoryMode = () => {
     companion.cfg.memoryMode = runtimeOpts.memoryMode;
   };
@@ -3386,6 +3467,11 @@ function apply(ctx, config = {}) {
           kind: "exact",
           path: "/api/companion-fishgirl/cabin/" + file,
           handler: (request, response) => {
+            if (!isSameOrigin(request)) {
+              response.writeHead(403, { "content-type": "application/json; charset=utf-8" });
+              response.end(JSON.stringify({ ok: false, error: "跨站请求已拒绝" }));
+              return;
+            }
             response.writeHead(200, {
               "content-type": file.endsWith(".png") ? "image/png" : "application/json; charset=utf-8",
               "cache-control": "public, max-age=3600"
@@ -3534,7 +3620,7 @@ function apply(ctx, config = {}) {
           const launchBody = await readJson2(request);
           if (launchBody && launchBody.action === "launch") {
             try {
-              const running = await readPetApi(runtimeOpts.petApiPath, [join2(PLUGIN_DIR, "..", "pet"), join2(PLUGIN_DIR, "pet")]);
+              const running = await readRuntimePetApi();
               if (running) {
                 try {
                   await callPet(running, "/api/state", {}, 3e3, "GET");
@@ -3557,7 +3643,7 @@ function apply(ctx, config = {}) {
           reply(200, { ok: true, enabled: false, connected: false });
           return;
         }
-        let api = await readPetApi(runtimeOpts.petApiPath, [join2(PLUGIN_DIR, "..", "pet"), join2(PLUGIN_DIR, "pet")]);
+        let api = await readRuntimePetApi();
         if (!api) {
           reply(200, { ok: true, enabled: true, ...petUnavailableError() });
           return;
@@ -4015,7 +4101,7 @@ ${log.join("\n")}` : "",
     }), companionOnly);
     const petApi = async () => {
       if (!runtimeOpts.petBridgeEnabled) return null;
-      return readPetApi(runtimeOpts.petApiPath, [join2(PLUGIN_DIR, "..", "pet"), join2(PLUGIN_DIR, "pet")]);
+      return readRuntimePetApi();
     };
     ctx.tools.register(defineTool({
       name: "companion_pet",

@@ -6,7 +6,7 @@
 
 让 DeepSeek 在对话之外多一层**长期陪伴关系**：会记住你的偏好与重要往事，也会记得**在别的窗口里你送过什么、聊过什么**；随情感交流慢慢成长、有自己的心情与关系阶段，并把这些状态跨会话延续下去。所有数据留在本地、按用户隔离、可随时删除或导出。
 
-- 当前版本：**v0.24.2**
+- 当前版本：**v0.24.3**
 - 运行产物：`dist/companion.js`（唯一宿主入口）+ `client.js`（子菜单、配置卡、鱼鱼小窝面板）+ `assets/cabin/`（CC BY 4.0 房间素材）。真 Live2D 桌宠是**独立程序**，不随本插件分发（见后文「真 Live2D 外部桌宠」）
 - 适用：`deepseek-ai/deepseek-harness`（dsh，Cordis 4 / 桌面端与 web profile）
 
@@ -353,7 +353,7 @@ npm install --no-save "file:<插件目录>"
 
 - **本机 HTTP**：桌宠在 `127.0.0.1` 上提供服务、用 Bearer token 鉴权，暴露 `/api/state`（当前表情/动作/显示状态 + 表情动作目录）、`/api/commands`（插件→桌宠命令队列）、`/api/events`（桌宠→插件事件队列）、`/api/action`、`/api/reload`，并兼容旧 `/say`、`/call/<tool>`。面板与模型都能发台词、表情、动作；面板还能读到桌宠点击/拖拽事件。
 - **共享临场意图（presence）**：一份「表情 + 动作 + 短气泡」的意图可下发到 Live2D 桌宠，让它表现指定状态（带去重与过期，重连不重播）。面板桌宠 tab 有「临场意图」入口，模型可用 `companion_pet` 的 `op=presence` 主动触发。
-- **一键启动**：面板桌宠页点「一键启动桌宠」即可从 DSH 拉起本机桌宠进程；**默认 Electron 透明桌宠窗口**，只执行桌宠目录里的白名单脚本（`launch-electron.mjs` / `launch.mjs` / `server-only.mjs`），不执行任意命令。模型可用 `companion_pet op=launch` 的 `mode` 选 `electron`（默认）/ `browser`（浏览器窗口）/ `server`（仅本机服务）。桌宠目录由设置项 `petDir` 指定，留空则从 `petApiPath` 与常见安装位置自动探测。启动后自动轮询等待连接。
+- **一键启动**：面板桌宠页点「一键启动桌宠」即可从 DSH 拉起本机桌宠进程；**默认 Electron 透明桌宠窗口**，只执行桌宠目录里的白名单脚本（`launch-electron.mjs` / `launch.mjs` / `server-only.mjs`），不执行任意命令。模型可用 `companion_pet op=launch` 的 `mode` 选 `electron`（默认）/ `browser`（浏览器窗口）/ `server`（仅本机服务）。桌宠目录由设置项 `petDir` 指定，留空则从 `petApiPath` 与常见安装位置自动探测；桥接读取 `api.json` 时也用同一个 `petDir`，确保「一键启动成功」后能连上。启动后自动轮询等待连接。
 - **安全**：桌宠 `api.json` 的 token **只在 dsh 宿主进程与桌宠进程之间使用，绝不下发浏览器客户端**；桌宠地址必须为本机回环地址；面板只调本插件的 `/api/companion-fishgirl/pet` 路由，跨站请求一律拒绝。
 
 ### 桌宠程序（需你另行准备）
@@ -695,7 +695,7 @@ token 估算按中英文字符折算的近似值（中文 ~0.6 tok/字），相�
 | `curateOnClose`                | true              | 窗口关闭后是否留「待整理」标记、下扇窗口打开时让模型自己挑值得长期记住的内容。**可在设置卡改**                                                                  |
 | `petBridgeEnabled`             | false             | 是否启用 Live2D 桌宠桥接。开启后从本机桌宠 api.json 读地址+token；新版桌宠支持状态/表情/动作/事件双向同步，旧版走 `/say` `/call` 兼容；token 绝不下发到客户端。**可在设置卡改** |
 | `petApiPath`                   | `''`              | 桌宠 `api.json` 路径（绝对路径）。留空时自动在常见目录里找                                                                          |
-| `petDir`                       | `''`              | 桌宠目录（含 `launch-electron.mjs` 的绝对路径），供面板「一键启动桌宠」使用。留空时自动探测。**可在设置卡改**                                             |
+| `petDir`                       | `''`              | 桌宠目录（含 `launch-electron.mjs` 的绝对路径），供面板「一键启动桌宠」与桥接读取 `api.json` 共用。留空时自动探测。**可在设置卡改**                                             |
 | `allowMutations`               | true              | 是否给模型可变工具                                                                                                          |
 | `toolUserId` / `commandUserId` | `''`              | 显式用户键；留空则统一用匿名 home id                                                                                             |
 
@@ -719,7 +719,7 @@ token 估算按中英文字符折算的近似值（中文 ~0.6 tok/字），相�
 
 - **桌宠只连本机**：桌宠 `api.json` 里的地址必须是回环地址（`127.0.0.1` / `localhost`），否则插件拒绝连接——避免 Bearer token 被发往第三方主机。
 - **配置接口防跨站**：设置、小窝、星图、桌宠代理等本地路由会校验 `Origin` 与 `Host`，跨站请求一律 403（恶意网页无法改你的开关或读你的数据）。
-- **媒体展示有边界**：`companion_show_media` 只接受绝对路径，拒绝 `.ssh`/`.aws`/系统目录等受保护位置，先 `stat` 再读字节；URL 下载只允许 http(s)、逐跳校验不落到内网、限制体积与超时。
+- **媒体展示有边界**：`companion_show_media` 只接受绝对路径，拒绝 `.ssh`/`.aws`/系统目录等受保护位置，先 `stat` 再读字节；URL 下载只允许 http(s)、逐跳校验不落到内网（含 IPv6 映射/未指定地址与 CGNAT 等绕过形态），流式限制体积与超时。
 - **写入记忆的文本会清洗**：模型写入的话题名/结论统一去控制字符并限长，避免把任意文本变成下一轮的提示词。
 
 ---

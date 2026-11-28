@@ -1,3 +1,15 @@
+## v0.24.3 · 修复桌宠拖动抖动 + 一键启动后桥接不上 · 2026-11-27
+
+- **修复桌宠拖动明显抖动**（外部 `pet/`）：拖动原先按 `clientX/clientY` 累计位移，并用 `getPosition()+dx` 增量移动窗口；窗口一旦被 `setPosition` 移动，鼠标在窗口内的相对坐标就会反向变化，被当成新的拖拽位移形成反馈，表现为来回抖。现在改用 `screenX/screenY` 全局坐标算出窗口目标位置，经 `petBridge.moveTo()` 让主进程直接 `setPosition`（相同目标不重复调用），无累积取整误差；浏览器回退模式仍按屏幕位移移动模型本体。
+- **修复「一键启动成功但桥接不上」**：一键启动用设置里的 `petDir` 找桌宠目录，桥接读 `api.json` 时却只找了插件相邻目录和常见安装位置，没带上 `petDir`，因此启动成功后面板仍显示未连接。现在 `petDir` 同时用于启动与桥接；`petApiPath` 仍优先，但配置失效时也会回退到其它候选目录。
+- **安全加固（代码审阅）**：
+  - `companion_show_media` 的 SSRF 判定重写：WHATWG URL 会把 `0x7f000001`/`127.1` 规范成 `127.0.0.1`，但把 IPv4-mapped IPv6 规范成 `[::ffff:7f00:1]`，旧判断漏掉这类回环地址。现在所有以 `::` 开头的 IPv6（loopback/unspecified/mapped/compatible）一律拒绝，并补齐 CGNAT（`100.64/10`）、保留段、link-local、unique-local 等私有网段。
+  - 远程媒体与桌宠响应改为**流式限量读取**：此前只检查 `content-length`，服务端省略该头时 `arrayBuffer()`/`text()` 会先把整块响应读进内存再判超限，存在内存耗尽风险；现在按块累加，超限立即取消并报错。
+  - 小窝像素素材路由补 `isSameOrigin` 校验，与其它本地路由保持一致。
+  - 新增回归：`v024-stream-cap`（远程下载/桌宠响应流式超限即取消）、`v023-security` 扩 5 条 SSRF 规范化绕过用例；全量回归 24 PASS / 1 FAIL（`verify-pet-path` 为已知外部桌宠环境依赖）。
+
+---
+
 ## v0.24.2 · 桌宠默认 Electron 启动 + 修复渲染白屏 · 2026-11-27
 
 - **一键启动默认 Electron 透明桌宠**：此前默认走 `launch.mjs`（Chrome `--app` 浏览器窗口，带标题栏、非置顶）。现在默认执行 `launch-electron.mjs`（无边框、透明、置顶、可鼠标穿透的 Electron 桌宠）；浏览器/无窗口模式保留为可选：`companion_pet op=launch` 的 `mode=electron`（默认）/ `browser` / `server`，HTTP 路由同步透传。白名单扩为三个脚本，`resolvePetDir` 同时识别 `launch-electron.mjs` 与 `launch.mjs`。设置卡/面板/README 文案同步。

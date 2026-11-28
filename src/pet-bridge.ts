@@ -29,17 +29,18 @@ function userHome() {
     : (typeof process !== 'undefined' && process.env?.DSH_HOME ? process.env.DSH_HOME : homedir())
 }
 
-/** 解析 api.json 路径：显式配置优先，其次常见安装位置（含 pet/ 自身）。 */
+/** 解析 api.json 路径：显式配置优先，其次额外目录/常见安装位置（含 pet/ 自身）。 */
 export function resolveApiPath(configured, extraDirs = []) {
+  const out = []
   if (typeof configured === 'string' && configured.trim()) {
     const p = configured.trim()
-    return isAbsolute(p) || /^[A-Za-z]:[\\/]/.test(p) ? p : join(userHome(), p)
+    // 显式路径放第一位，但配错/失效时仍继续找其它位置，避免「启动成功却桥接不上」。
+    out.push(isAbsolute(p) || /^[A-Za-z]:[\\/]/.test(p) ? p : join(userHome(), p))
   }
   const roots = [userHome()]
   if (typeof process !== 'undefined' && process.env?.DSH_HOME && process.env.DSH_HOME !== userHome()) {
     roots.push(process.env.DSH_HOME)
   }
-  const out = []
   // extraDirs 可能是绝对路径（如插件自身的 dist/../pet）。path.join(root, absPath)
   // 在 Windows 上不会让绝对路径覆盖前缀，会拼出 "C:\Users\x\D:\..." 这种无效路径，
   // 所以绝对路径要直接加入候选，不能前缀化。
@@ -129,6 +130,29 @@ export function resolvePetDir(petDir, configuredApi, extraDirs = []) {
   return null
 }
 
+/** 流式读取桌宠响应文本，防止服务端省略 content-length 时用超大响应耗尽宿主内存。 */
+async function readPetResponseText(res) {
+  const reader = typeof res?.body?.getReader === 'function' ? res.body.getReader() : null
+  if (!reader) return res.text()
+  const chunks = []
+  let total = 0
+  try {
+    for (;;) {
+      const { done, value } = await reader.read()
+      if (done) break
+      total += value.byteLength
+      if (total > MAX_PET_RESPONSE_BYTES) {
+        try { await reader.cancel() } catch { /* 忽略取消失败 */ }
+        throw new Error('桌宠响应过大')
+      }
+      chunks.push(Buffer.from(value))
+    }
+  } finally {
+    try { reader.releaseLock?.() } catch { /* 忽略 */ }
+  }
+  return Buffer.concat(chunks, total).toString('utf8')
+}
+
 /** 调用桌宠本机接口（所有请求从宿主发出，token 不进浏览器）。 */
 export async function callPet(api, route, body, timeoutMs = 15000, method = 'POST') {
   // 二次校验：即使 api 对象来自旧缓存或被篡改，也不把 token 发往非回环地址。
@@ -146,7 +170,7 @@ export async function callPet(api, route, body, timeoutMs = 15000, method = 'POS
     // 限制响应体：被篡改/异常的服务端不能靠超大响应撑爆宿主内存。
     const declared = Number(res.headers?.get?.('content-length') || 0)
     if (declared > MAX_PET_RESPONSE_BYTES) throw new Error('桌宠响应过大')
-    const text = await res.text()
+    const text = await readPetResponseText(res)
     if (text.length > MAX_PET_RESPONSE_BYTES) throw new Error('桌宠响应过大')
     let data
     try { data = JSON.parse(text) } catch { data = { raw: text.slice(0, 2000) } }

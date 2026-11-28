@@ -24,7 +24,7 @@ import { z } from 'zod'
 import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs'
 import { readFile, writeFile, mkdir } from 'node:fs/promises'
 import { homedir } from 'node:os'
-import { dirname, join, extname, basename } from 'node:path'
+import { dirname, join, extname, basename, isAbsolute, resolve } from 'node:path'
 import { AsyncLocalStorage } from 'node:async_hooks'
 import { blankHome, normalizeHome, tickHome, homeAction, homeSnapshot,
   cropById, recipeById, CROPS, RECIPES, ACTIVITIES, PALETTES } from './home'
@@ -32,7 +32,6 @@ import { normalizeMode, appendStream, searchStream, traceStream, blankTiers, nor
   distillTier, archiveTier, buildStarmap, layoutStarmap, MODE_LABELS } from './memory-modes'
 import { readPetApi, resolvePetDir, petUnavailableError, callPet, petText, isRichPet } from './pet-bridge'
 import { spawn } from 'node:child_process'
-import { resolve } from 'node:path'
 
 // 最近一份「共享临场意图」（表情 + 动作 + 短气泡），插件进程内共享，带过期时间。
 // 桌宠进程维护自己的副本（pet/server.mjs 的 state.lastPresence）；这里是插件侧镜像，
@@ -1798,20 +1797,66 @@ const mediaKindOf = (mediaType) => String(mediaType).startsWith('video/') ? 'vid
  *
  * 媒体链接由模型给出、也可能来自网页内容；如果直接 fetch 并自动跟随重定向，
  * 就等于给了一个「探测本机与内网服务」的原语。这里在每一跳前都拦掉私有网段。
+ *
+ * 注意：WHATWG URL 会把 0x7f000001 / 0177.0.0.1 / 127.1 规范成 127.0.0.1，
+ * 但会把 IPv4-mapped IPv6 规范成 [::ffff:7f00:1]（十六进制），旧的
+ * `startsWith('::ffff:10.')` 判断会漏掉。这里按规范化后的形态重写：
+ * 所有以 "::" 开头的 IPv6（loopback / unspecified / IPv4-mapped / IPv4-compatible）
+ * 一律拒绝，另外覆盖 link-local、unique-local 与常见私有/CGNAT/保留 IPv4 段。
  */
 function isPrivateHost(hostname) {
   const h = String(hostname || '').toLowerCase().replace(/^\[/, '').replace(/\]$/, '')
   if (!h) return true
-  if (h === 'localhost' || h === '::1' || h === '0.0.0.0') return true
-  if (h.endsWith('.localhost') || h.endsWith('.local') || h.endsWith('.internal')) return true
-  if (/^127\./.test(h)) return true
-  if (/^10\./.test(h)) return true
-  if (/^192\.168\./.test(h)) return true
-  if (/^172\.(1[6-9]|2\d|3[01])\./.test(h)) return true
-  if (/^169\.254\./.test(h)) return true
-  if (/^(fc|fd)[0-9a-f]{2}:/.test(h)) return true
-  if (h === '::ffff:127.0.0.1' || h.startsWith('::ffff:10.')) return true
+  if (h === 'localhost' || h.endsWith('.localhost') || h.endsWith('.local') || h.endsWith('.internal')) return true
+  if (h.includes(':')) {
+    if (h.startsWith('::')) return true
+    if (/^fe[89ab][0-9a-f]:/.test(h)) return true // link-local / multicast
+    if (/^(fc|fd)[0-9a-f]{2}:/.test(h)) return true // unique-local
+    return false
+  }
+  // 常规 DNS 名称（example.com / cdn.xxx 等）不是本文要拦的 IP 形态，放行。
+  if (!/^[0-9.]+$/.test(h)) return false
+  const m = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/.exec(h)
+  // 形似 IP 但不是规范四段十进制（WHATWG 未规范的写法）按最保守处理：拒绝。
+  if (!m) return true
+  const [a, b, c] = m.slice(1).map(Number)
+  if ([a, b, c, Number(m[4])].some(n => n > 255)) return true
+  if (a === 0 || a === 10 || a === 127) return true
+  if (a === 169 && b === 254) return true
+  if (a === 172 && b >= 16 && b <= 31) return true
+  if (a === 192 && b === 168) return true
+  if (a === 192 && b === 0 && c === 0) return true
+  if (a === 100 && b >= 64 && b <= 127) return true // CGNAT
+  if (a === 198 && (b === 18 || b === 19)) return true // benchmarking
+  if (a >= 224) return true // multicast / reserved
   return false
+}
+
+/** 按上限流式读取 fetch 响应体，避免服务端省略 content-length 时把大流整体读进内存。 */
+async function readCappedBuffer(res, cap, label) {
+  const reader = typeof res?.body?.getReader === 'function' ? res.body.getReader() : null
+  if (!reader) {
+    const buf = Buffer.from(await res.arrayBuffer())
+    if (buf.byteLength > cap) throw new Error(`${label} (${buf.byteLength} 字节) 超过读取上限 ${cap} 字节`)
+    return buf
+  }
+  const chunks = []
+  let total = 0
+  try {
+    for (;;) {
+      const { done, value } = await reader.read()
+      if (done) break
+      total += value.byteLength
+      if (total > cap) {
+        try { await reader.cancel() } catch { /* 忽略取消失败 */ }
+        throw new Error(`${label} (${total} 字节) 超过读取上限 ${cap} 字节`)
+      }
+      chunks.push(Buffer.from(value))
+    }
+  } finally {
+    try { reader.releaseLock?.() } catch { /* 忽略 */ }
+  }
+  return Buffer.concat(chunks, total)
 }
 
 /** 本地媒体路径黑名单：凭据与系统目录不对模型开放。 */
@@ -1883,10 +1928,7 @@ async function downloadMedia(url, cfg) {
     if (declared && declared > cap) {
       throw new Error(`companion_show_media: ${current} (${declared} 字节) 超过读取上限 ${cap} 字节`)
     }
-    const buf = Buffer.from(await res.arrayBuffer())
-    if (buf.byteLength > cap) {
-      throw new Error(`companion_show_media: ${current} (${buf.byteLength} 字节) 超过读取上限 ${cap} 字节`)
-    }
+    const buf = await readCappedBuffer(res, cap, `companion_show_media: ${current}`)
     return { mediaType, data: buf }
   }
   throw new Error('companion_show_media: 重定向次数过多，已放弃下载')
@@ -1986,6 +2028,22 @@ export function apply(ctx, config = {}) {
     child.on('error', (err) => ctx.logger.warn(`companion: pet launch failed: ${String(err)}`))
     return { dir, mode, message: '桌宠正在启动，稍等几秒后会自动连上。' }
   }
+  // 桥接读取 api.json 的目录候选。关键：一键启动用的是 petDir，桥接也必须认它，
+  // 否则会出现「一键启动成功、面板却一直显示未连接」。显式 petApiPath 仍优先，
+  // 但失效时 readPetApi 会继续往下找。
+  const petApiDirs = () => {
+    const dirs = []
+    const configured = typeof runtimeOpts.petDir === 'string' ? runtimeOpts.petDir.trim() : ''
+    if (configured && (isAbsolute(configured) || /^[A-Za-z]:[\\/]/.test(configured))) dirs.push(configured)
+    const discovered = resolvePetDir(runtimeOpts.petDir, runtimeOpts.petApiPath,
+      [join(PLUGIN_DIR, '..', 'pet'), join(PLUGIN_DIR, 'pet')])
+    if (discovered && !dirs.includes(discovered)) dirs.push(discovered)
+    for (const d of [join(PLUGIN_DIR, '..', 'pet'), join(PLUGIN_DIR, 'pet')]) {
+      if (!dirs.includes(d)) dirs.push(d)
+    }
+    return dirs
+  }
+  const readRuntimePetApi = () => readPetApi(runtimeOpts.petApiPath, petApiDirs())
   // 记忆模式变了要同步到 service（service 的 getMemoryMode 从这里读）。
   const syncMemoryMode = () => { companion.cfg.memoryMode = runtimeOpts.memoryMode }
   const isGlobal = () => runtimeOpts.globalCompanionMode
@@ -2512,6 +2570,11 @@ export function apply(ctx, config = {}) {
         const disposeAsset = ctx.webServer.register({
           kind: 'exact', path: '/api/companion-fishgirl/cabin/' + file,
           handler: (request, response) => {
+            if (!isSameOrigin(request)) {
+              response.writeHead(403, { 'content-type': 'application/json; charset=utf-8' })
+              response.end(JSON.stringify({ ok: false, error: '跨站请求已拒绝' }))
+              return
+            }
             response.writeHead(200, {
               'content-type': file.endsWith('.png') ? 'image/png' : 'application/json; charset=utf-8',
               'cache-control': 'public, max-age=3600',
@@ -2603,7 +2666,7 @@ export function apply(ctx, config = {}) {
           if (launchBody && launchBody.action === 'launch') {
             try {
               // 已经在跑就不再重复拉起。
-              const running = await readPetApi(runtimeOpts.petApiPath, [join(PLUGIN_DIR, '..', 'pet'), join(PLUGIN_DIR, 'pet')])
+              const running = await readRuntimePetApi()
               if (running) {
                 try { await callPet(running, '/api/state', {}, 3000, 'GET'); reply(200, { ok: true, started: false, alreadyRunning: true, message: '桌宠已在运行。' }); return } catch { /* 旧 api.json，继续启动 */ }
               }
@@ -2617,8 +2680,8 @@ export function apply(ctx, config = {}) {
           request.__companionBody = launchBody
         }
         if (!runtimeOpts.petBridgeEnabled) { reply(200, { ok: true, enabled: false, connected: false }); return }
-        // 优先找插件自带桌宠目录里的 api.json（相对 dist 的上级 pet/）
-        let api = await readPetApi(runtimeOpts.petApiPath, [join(PLUGIN_DIR, '..', 'pet'), join(PLUGIN_DIR, 'pet')])
+        // 按 petApiPath → petDir → 自动探测的桌宠目录顺序找 api.json
+        let api = await readRuntimePetApi()
         if (!api) { reply(200, { ok: true, enabled: true, ...petUnavailableError() }); return }
         const rich = isRichPet(api)
 
@@ -3023,7 +3086,7 @@ export function apply(ctx, config = {}) {
     // 桌宠没开或桥接没开时明确回报，绝不假装做过。
     const petApi = async () => {
       if (!runtimeOpts.petBridgeEnabled) return null
-      return readPetApi(runtimeOpts.petApiPath, [join(PLUGIN_DIR, '..', 'pet'), join(PLUGIN_DIR, 'pet')])
+      return readRuntimePetApi()
     }
     ctx.tools.register(defineTool({
       name: 'companion_pet',
